@@ -17,6 +17,26 @@ def evaluate_trade_confluence(technical_data: dict, onchain_data: dict):
             "reason": f"Forex pair {ticker} detected. Bypassing blockchain data layers. Technical ribbon setup authorized."
         }
 
+    # Timeframe-based aggression threshold
+    tf = technical_data.get("timeframe", "")
+    threshold_reason = ""
+    is_favorable = True
+    if tf == "15":
+        threshold_reason = "Short-term Smart Money momentum required."
+        if direction == "BUY":
+            is_favorable = net_flow >= 0
+        else:
+            is_favorable = net_flow <= 0
+    else:
+        threshold_reason = "Long-term accumulation trend required."
+        is_favorable = True  # Placeholder for 7-day trend logic
+
+    if not is_favorable:
+        return {
+            "decision": "ABORT",
+            "reason": f"Technical signal ignored: {threshold_reason}"
+        }
+
     # Direction 1: LONG SETUPS
     if direction == "BUY":
         if net_flow < 0:
