@@ -239,3 +239,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"📝 *Note:* {reasoning}\n"
         f"📈 _Confluence Engine V3.1_"
     )
+
+    background_tasks.add_task(send_telegram_notification, rich_message)
+    return {"status": "success", "decision": decision}
