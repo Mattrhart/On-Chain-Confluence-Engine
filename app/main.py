@@ -5,7 +5,6 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from app.notifier import send_telegram_notification
-# Ensure you are importing your new async intelligence layer
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
@@ -35,7 +34,7 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "Engine Active", "port": int(os.getenv("PORT", 8000))}
+    return {"status": "Engine Active", "port": int(os.getenv("PORT", 8080))}
 
 @app.get("/health")
 async def health_check():
@@ -74,10 +73,7 @@ async def check_forex_news_risk(symbol: str) -> dict:
     return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News API timeout"}
 
 async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
-    """
-    Dynamic Cross-Pair Macro Engine.
-    Handles Majors, Minors, and Crosses dynamically based on data surprises.
-    """
+    """Dynamic Cross-Pair Macro Engine."""
     api_key = os.getenv("FMP_API_KEY", "iYdmc43pzwqT7sETRC8pwVG7mIqDTNXI")
     today = datetime.date.today().isoformat()
     url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={api_key}"
@@ -107,11 +103,8 @@ async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
                         
                         is_positive_surprise = actual > estimate
                         
-                        # Macro Matrix Calculation:
-                        # Positive surprise strengthens that specific currency. Negative weakens it.
                         if event_currency == base_currency:
                             base_strengthened = is_positive_surprise
-                            # If we are BUYING the pair, we want base to strengthen. If it weakened instead, conflict!
                             if trade_dir == "BUY" and not base_strengthened:
                                 return {"action": "ABORT", "reason": f"Macro Conflict: {event['event']} weakened base {base_currency}."}
                             if trade_dir == "SHORT" and base_strengthened:
@@ -119,7 +112,6 @@ async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
                         
                         elif event_currency == quote_currency:
                             quote_strengthened = is_positive_surprise
-                            # If we are BUYING the pair, we want quote to weaken. If it strengthened, conflict!
                             if trade_dir == "BUY" and quote_strengthened:
                                 return {"action": "ABORT", "reason": f"Macro Conflict: {event['event']} strengthened counter {quote_currency}."}
                             if trade_dir == "SHORT" and not quote_strengthened:
@@ -127,7 +119,6 @@ async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
                             
                     except (ValueError, TypeError):
                         continue
-                        
         except Exception as e:
             print(f"⚠️ FMP Macro Engine Error: {e}")
             
@@ -142,9 +133,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         raise HTTPException(status_code=401)
 
     raw_ticker = payload.ticker.upper().replace("/", "_").replace("-", "_")
-    
-    # Smart Asset Classification: 
-    # If the string contains explicit FX structures or matches currency pair sizing, route to Forex.
     is_forex = "_" in raw_ticker and len(raw_ticker.split("_")[0]) == 3 and len(raw_ticker.split("_")[1]) == 3
     
     decision = "EXECUTE"
@@ -156,6 +144,10 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         
         av_intel = await check_forex_news_risk(symbol)
         fmp_intel = await evaluate_fmp_macro_direction(symbol, payload.direction)
+        
+        # X-RAY DEBUG PRINTS: Watch these in your Railway Logs!
+        print(f"📊 [X-RAY] Alpha Vantage Intel for {symbol}: {av_intel}")
+        print(f"📊 [X-RAY] FMP Macro Intel for {symbol}: {fmp_intel}")
         
         if av_intel["risk_score"] >= 10.0:
             decision = "ABORT"
@@ -175,9 +167,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         metric_display = f"AV: {av_intel['sentiment']}"
 
     else:
-        # ==========================================
-        # EXTENDED CRYPTO PIPELINE (V3.1 FINALIZE)
-        # ==========================================
         symbol = raw_ticker.split(":")[-1].replace("USDT", "").replace("USDC", "")
         token_info = TOKEN_MAP.get(symbol)
 
@@ -198,7 +187,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             conviction = metrics["sm_conviction"]
             direction = payload.direction.upper()
 
-            # SKEPTIC TRAPS & CONFLUENCE MATRIX
             if risk >= 8:
                 decision = "ABORT"
                 reasoning = f"⚠️ HIGH RISK PROFILE: Nansen smart risk score is critically high ({risk}/10)."
@@ -222,7 +210,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             metric_display = "No On-Chain Analytics Available"
             reasoning = f"Trading execution based purely on raw technical signal metrics."
 
-# Rich Notification Engine
+    # Rich Notification Engine
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
     
     rich_message = (
