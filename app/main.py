@@ -8,7 +8,7 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="3.1")
+app = FastAPI(title="Sovereign Confluence Engine", version="3.2")
 
 # --- THE INSTITUTIONAL WATCHLIST & SECTOR MAP ---
 TOKEN_MAP = {
@@ -40,7 +40,7 @@ async def root():
 async def health_check():
     return {
         "status": "healthy",
-        "engine_version": "3.1",
+        "engine_version": "3.2",
         "nansen_connectivity": True if os.getenv("NANSEN_API_KEY") else False,
         "alphavantage_connectivity": True if os.getenv("ALPHA_VANTAGE_KEY") else False,
         "fmp_connectivity": True if os.getenv("FMP_API_KEY") else False
@@ -49,10 +49,13 @@ async def health_check():
 # --- INTELLIGENCE LAYERS ---
 
 async def check_forex_news_risk(symbol: str) -> dict:
-    """Hits Alpha Vantage to scan recent headlines for extreme event volatility."""
+    """
+    Advanced Engine: Scans headlines and applies a Time-Decay (Half-Life) 
+    to historical macroeconomic shocks.
+    """
     api_key = os.getenv("ALPHA_VANTAGE_KEY", "FNZA72FMXYIDU7VJ")
     av_ticker = f"FX:{symbol.replace('_', '')}"
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={av_ticker}&sort=LATEST&limit=3&apikey={api_key}"
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={av_ticker}&sort=LATEST&limit=15&apikey={api_key}"
     
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
@@ -60,16 +63,64 @@ async def check_forex_news_risk(symbol: str) -> dict:
             if res.status_code == 200:
                 feed = res.json().get("feed", [])
                 if not feed:
-                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News sentiment stable"}
+                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "No historical news drag"}
                 
                 critical_keywords = ["fomc", "fed rate", "cpi print", "nonfarm", "nfp", "inflation shock", "ecb", "boe"]
-                for article in feed:
-                    if any(kw in article.get("title", "").lower() for kw in critical_keywords):
-                        return {"risk_score": 10.0, "sentiment": "NEUTRAL", "reason": f"News Shock: {article.get('title')[:40]}..."}
                 
-                return {"risk_score": 0.0, "sentiment": feed[0].get("overall_sentiment_label", "NEUTRAL"), "reason": "News sentiment stable"}
+                total_drag = 0.0
+                latest_shock = None
+                now = datetime.datetime.now()
+
+                for article in feed:
+                    pub_time_str = article.get("time_published", "")
+                    if not pub_time_str:
+                        continue
+                        
+                    try:
+                        pub_time = datetime.datetime.strptime(pub_time_str, "%Y%m%dT%H%M%S")
+                        days_old = (now - pub_time).days
+                    except:
+                        days_old = 0
+
+                    # DECAY FORMULA: Weight drops every day
+                    decay_multiplier = max(0.1, (0.8 ** days_old)) 
+                    title = article.get("title", "").lower()
+
+                    if any(kw in title for kw in critical_keywords):
+                        shock_value = 10.0 * decay_multiplier
+                        total_drag += shock_value
+                        
+                        if not latest_shock or shock_value > latest_shock['value']:
+                            latest_shock = {
+                                "value": shock_value, 
+                                "days": days_old, 
+                                "title": article.get("title")[:30]
+                            }
+                
+                base_sentiment = feed[0].get("overall_sentiment_label", "NEUTRAL")
+
+                if total_drag >= 8.0:
+                    return {
+                        "risk_score": total_drag, 
+                        "sentiment": base_sentiment, 
+                        "reason": f"CRITICAL OVERHANG: {latest_shock['title']}... ({latest_shock['days']} days ago) still dragging asset."
+                    }
+                elif total_drag >= 4.0:
+                    return {
+                        "risk_score": total_drag, 
+                        "sentiment": base_sentiment, 
+                        "reason": f"Residual Macro Drag active from {latest_shock['days']} days ago. Proceed with caution."
+                    }
+                else:
+                    return {
+                        "risk_score": total_drag, 
+                        "sentiment": base_sentiment, 
+                        "reason": "Historical macro timeline clear."
+                    }
+                    
         except Exception as e:
             print(f"⚠️ Alpha Vantage Error: {e}")
+            
     return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News API timeout"}
 
 async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
@@ -145,11 +196,10 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         av_intel = await check_forex_news_risk(symbol)
         fmp_intel = await evaluate_fmp_macro_direction(symbol, payload.direction)
         
-        # X-RAY DEBUG PRINTS: Watch these in your Railway Logs!
         print(f"📊 [X-RAY] Alpha Vantage Intel for {symbol}: {av_intel}")
         print(f"📊 [X-RAY] FMP Macro Intel for {symbol}: {fmp_intel}")
         
-        if av_intel["risk_score"] >= 10.0:
+        if av_intel["risk_score"] >= 8.0:
             decision = "ABORT"
             reasoning = f"🛑 {av_intel['reason']}"
             stars = "⚠️"
@@ -158,7 +208,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             reasoning = f"🛑 {fmp_intel['reason']}"
             stars = "⚠️"
         else:
-            reasoning = f"Filters Clear. {fmp_intel['reason']}"
+            reasoning = f"Filters Clear. {av_intel['reason']} | {fmp_intel['reason']}"
             if av_intel["sentiment"] in ["BULLISH", "VERY_BULLISH"] and payload.direction.upper() == "BUY":
                 stars = "⭐⭐⭐⭐⭐"
             elif av_intel["sentiment"] in ["BEARISH", "VERY_BEARISH"] and payload.direction.upper() == "SHORT":
@@ -225,7 +275,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 *Note:* {reasoning}\n"
-        f"📈 _Confluence Engine V3.1_"
+        f"📈 _Confluence Engine V3.2_"
     )
 
     background_tasks.add_task(send_telegram_notification, rich_message)
