@@ -37,6 +37,18 @@ else
     prox_line_drawn := false
 
 //-----------------------------------------------------------------------------
+// Horizontal Ribbon Filter (50 SMA Anchor Slope)
+//-----------------------------------------------------------------------------
+// This solves the "firing when flat" issue. 
+// A pullback dips the 20 EMA, but the 50 SMA should remain angled.
+min_slope = input.float(0.02, "Min 50 SMA Slope (%)", step=0.01, tooltip="Disarms the ribbon if the overall trend goes completely flat.")
+bull_slope = ta.roc(slow_ma, 5)
+bear_slope = -ta.roc(slow_ma, 5)
+
+bull_is_flat = bull_slope < min_slope
+bear_is_flat = bear_slope < min_slope
+
+//-----------------------------------------------------------------------------
 // Trigger Conditions (Dynamic Gap, Velocity, & Duration)
 //-----------------------------------------------------------------------------
 macro_atr = ta.atr(100)
@@ -45,8 +57,6 @@ safe_atr = math.max(macro_atr, 0.0001)
 gap_atr = math.abs(fast_ma - slow_ma) / safe_atr
 req_gap = input.float(0.5, "Required Gap (Macro ATR)", step=0.1)
 
-// --- THE IGNITION OVERRIDE (Fresh Cross Grace Period) ---
-// Cuts the gap requirement in half if the cross is fresh, to catch the first touch.
 bars_since_bull_cross = ta.barssince(ta.crossover(fast_ma, slow_ma))
 bars_since_bear_cross = ta.barssince(ta.crossunder(fast_ma, slow_ma))
 
@@ -62,13 +72,13 @@ prolonged_bars = input.int(15, "Prolonged Trend Override (Bars)")
 bull_prolonged = ta.barssince(fast_ma <= slow_ma) >= prolonged_bars
 bear_prolonged = ta.barssince(fast_ma >= slow_ma) >= prolonged_bars
 
-bull_trigger = (fast_ma > slow_ma) and (gap_atr >= dyn_bull_gap) and (bull_vel >= req_vel or bull_prolonged)
-bear_trigger = (fast_ma < slow_ma) and (gap_atr >= dyn_bear_gap) and (bear_vel >= req_vel or bear_prolonged)
+// Require the 50 SMA to NOT be flat in order to trigger the arming sequence.
+bull_trigger = (fast_ma > slow_ma) and (gap_atr >= dyn_bull_gap) and (bull_vel >= req_vel or (bull_prolonged and bull_vel > 0)) and not bull_is_flat
+bear_trigger = (fast_ma < slow_ma) and (gap_atr >= dyn_bear_gap) and (bear_vel >= req_vel or (bear_prolonged and bear_vel > 0)) and not bear_is_flat
 
 //-----------------------------------------------------------------------------
 // Sustain Filter
 //-----------------------------------------------------------------------------
-// Lowered default to 1 so the fresh cross can arm immediately
 fan_hold = input.int(1, "Sustain Bars to Arm", minval=1)
 bull_sustained = ta.barssince(not bull_trigger) >= fan_hold
 bear_sustained = ta.barssince(not bear_trigger) >= fan_hold
@@ -84,9 +94,10 @@ if bull_sustained
 if bear_sustained
     bear_is_armed := true
 
-if (gap_atr < dyn_bull_gap * 0.7) or (close < slow_ma) or ta.crossunder(fast_ma, slow_ma) or not allow_long
+// NEW: If the 50 SMA goes horizontal (flat), immediately disarm the ribbon.
+if (gap_atr < dyn_bull_gap * 0.7) or (close < slow_ma) or ta.crossunder(fast_ma, slow_ma) or not allow_long or bull_is_flat
     bull_is_armed := false
-if (gap_atr < dyn_bear_gap * 0.7) or (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or not allow_short
+if (gap_atr < dyn_bear_gap * 0.7) or (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or not allow_short or bear_is_flat
     bear_is_armed := false
 
 //-----------------------------------------------------------------------------
@@ -115,17 +126,26 @@ if ta.crossunder(fast_ma, slow_ma)
     bear_retests := 0
     bull_retests := 3
 
-// --- THE SMART PA FILTER (Bleed Killer) ---
+// --- THE SMART PA FILTER ---
 bull_bleed = (low < low[1] and low[1] < low[2]) or (high < high[1] and high[1] < high[2])
 bear_bleed = (high > high[1] and high[1] > high[2]) or (low > low[1] and low[1] > low[2])
 
+// The Wick Rejection Override
+bull_wick_size = math.min(open, close) - low
+bull_body_size = math.abs(open - close)
+strong_bull_rejection = bull_wick_size > (bull_body_size * 2)
+
+bear_wick_size = high - math.max(open, close)
+bear_body_size = math.abs(open - close)
+strong_bear_rejection = bear_wick_size > (bear_body_size * 2)
+
 bull_touch      = low <= fast_ma
 bull_close_safe = close >= slow_ma
-bull_wick_absorbed = bull_touch and bull_close_safe and not bull_bleed
+bull_wick_absorbed = bull_touch and bull_close_safe and (not bull_bleed or strong_bull_rejection)
 
 bear_touch      = high >= fast_ma
 bear_close_safe = close <= slow_ma
-bear_wick_absorbed = bear_touch and bear_close_safe and not bear_bleed
+bear_wick_absorbed = bear_touch and bear_close_safe and (not bear_bleed or strong_bear_rejection)
 
 bull_dot = false
 bear_dot = false
