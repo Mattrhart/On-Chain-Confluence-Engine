@@ -222,13 +222,15 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             metric_display = "No On-Chain Analytics Available"
             reasoning = f"Trading execution based purely on raw technical signal metrics."
 
-    # Rich Notification Engine
+# Rich Notification Engine
+    price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
+    
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} *DECISION: {decision}*\n"
         f"━━━━━━━━━━━━━━━\n"
         f"💎 *Asset:* `${symbol}`\n"
         f"🏷️ *Sector:* `{sector}`\n"
-        f"f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${payload.price:,.5f}`\n" if is_forex else f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${payload.price:,.2f}`\n"
+        f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${price_display}`\n"
         f"━━━━━━━━━━━━━━━\n"
         f"{'🌍 *MACRO & SENTIMENT TELEMETRY*' if is_forex else '🛡️ *ON-CHAIN INTELLIGENCE*'}\n"
         f"• Status: `{metric_display}`\n"
@@ -237,6 +239,3 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"📝 *Note:* {reasoning}\n"
         f"📈 _Confluence Engine V3.1_"
     )
-
-    background_tasks.add_task(send_telegram_notification, rich_message)
-    return {"status": "success", "decision": decision}
