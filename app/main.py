@@ -228,7 +228,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"━━━━━━━━━━━━━━━\n"
         f"💎 *Asset:* `${symbol}`\n"
         f"🏷️ *Sector:* `{sector}`\n"
-        f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${payload.price:,.5f if is_forex else :,.2f}`\n"
+        f"f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${payload.price:,.5f}`\n" if is_forex else f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${payload.price:,.2f}`\n"
         f"━━━━━━━━━━━━━━━\n"
         f"{'🌍 *MACRO & SENTIMENT TELEMETRY*' if is_forex else '🛡️ *ON-CHAIN INTELLIGENCE*'}\n"
         f"• Status: `{metric_display}`\n"
