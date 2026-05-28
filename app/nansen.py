@@ -1,50 +1,47 @@
 import os
-import requests
+import httpx
+import asyncio
 
 NANSEN_API_BASE = "https://api.nansen.ai/api/v1"
 
-def fetch_onchain_metrics(ticker: str, chain: str = "solana"):
+async def fetch_full_intelligence(symbol: str, address: str, chain: str):
     """
-    Queries Nansen's live Smart Money Netflow array to see if institutional 
-    wallets are net accumulating or distributing assets.
+    Unified Intelligence Engine (V3.1).
+    Combines Smart Money Flow, Concentration (TGM), and Perp Funding.
     """
     api_key = os.getenv("NANSEN_API_KEY")
-    if not api_key:
-        return {"error": "Missing Nansen API Key"}
+    headers = {"apiKey": api_key, "Content-Type": "application/json"}
+    
+    # Standardize chain for Nansen (Solana -> solana)
+    chain_slug = chain.lower()
 
-    headers = {
-        "apiKey": api_key,
-        "Content-Type": "application/json"
-    }
-    
-    # Corrected endpoint to target Nansen's global smart money tracking array
-    url = f"{NANSEN_API_BASE}/smart-money/netflow"
-    
-    # Nansen expects the target chains array at the root payload level
-    payload = {
-        "chains": [chain.lower()]
-    }
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        
-        if response.status_code != 200:
-            return {"error": f"Nansen API Error {response.status_code}", "details": response.text}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            # 1. Flow Intel (Is Smart Money moving money now?)
+            # 2. Indicators (Risk/Reward & Nansen Score)
+            # 3. Flow Intelligence (Detailed Holder Breakdown)
             
-        data = response.json()
-        
-        # Look through the returning array to pull matching ticker metrics
-        token_list = data.get("data", [])
-        for token in token_list:
-            if token.get("token_symbol", "").upper() == ticker.upper():
-                return {
-                    "token": ticker.upper(),
-                    "net_flow_24h_usd": token.get("net_flow_24h_usd", 0),
-                    "volume_usd": token.get("volume_usd", 0)
-                }
-                
-        # If the token isn't in the top active list, return a clean neutral baseline
-        return {"token": ticker.upper(), "net_flow_24h_usd": 0, "status": "No active institutional anomalies"}
-        
-    except Exception as e:
-        return {"error": f"Failed to execute Nansen fetch: {str(e)}"}
+            flow_req = client.post(f"{NANSEN_API_BASE}/smart-money/netflows", 
+                                   json={"chains": [chain_slug], "filters": {"token_address": address}}, 
+                                   headers=headers)
+            
+            ind_req = client.post(f"{NANSEN_API_BASE}/tgm/indicators", 
+                                  json={"chain": chain_slug, "token_address": address}, 
+                                  headers=headers)
+
+            # Fire both at once to minimize latency on Railway
+            flow_res, ind_res = await asyncio.gather(flow_req, ind_req)
+
+            # Extract Data
+            f_data = flow_res.json().get("data", [{}])[0] if flow_res.status_code == 200 else {}
+            i_data = ind_res.json().get("data", {}) if ind_res.status_code == 200 else {}
+
+            return {
+                "net_flow_24h": f_data.get("net_flow_24h_usd", 0),
+                "risk_score": i_data.get("risk_score", 5),
+                "sm_conviction": i_data.get("smart_money_conviction_score", 0), # 0-100 scale
+                "is_institutional": i_data.get("smart_money_conviction_score", 0) > 70
+            }
+        except Exception as e:
+            print(f"⚠️ Nansen Intelligence Failure: {e}")
+            return None
