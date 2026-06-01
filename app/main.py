@@ -64,19 +64,22 @@ async def health_check():
         except Exception as e:
             health_report["api_connectivity_matrix"]["fmp"] = f"OFFLINE: {str(e)}"
 
-        # 3. Test Nansen Integration
+       # 3. Test Nansen Integration
         try:
-            nan_key = os.getenv("NANSEN_API_KEY", "nsn_77d85428e995e486381ed79004a4c588")
+            nan_key = os.getenv("NANSEN_API_KEY")
+            nan_payload = {
+                "chains": ["ethereum"],
+                "timeframe": "24h",
+                "pagination": {"page": 1, "per_page": 1}
+            }
             nan_res = await client.post(
-                "https://api.nansen.ai/api/v1/smart-money/netflows",
-                json={"chains": ["ethereum"], "filters": {"token_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"}},
+                "https://api.nansen.ai/api/v1/token-screener",
+                json=nan_payload,
                 headers={"apiKey": nan_key, "Content-Type": "application/json"}
             )
             health_report["api_connectivity_matrix"]["nansen"] = (
-                "CONNECTED" if nan_res.status_code in [200, 422, 400] else "AUTH_FAILED"
+                "CONNECTED" if nan_res.status_code == 200 else f"AUTH_FAILED ({nan_res.status_code})"
             )
-            if nan_res.status_code == 403:
-                health_report["api_connectivity_matrix"]["nansen"] = "AUTH_FAILED (403)"
         except Exception as e:
             health_report["api_connectivity_matrix"]["nansen"] = f"OFFLINE: {str(e)}"
 

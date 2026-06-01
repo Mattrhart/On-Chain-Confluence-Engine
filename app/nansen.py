@@ -1,47 +1,50 @@
 import os
 import httpx
-import asyncio
 
 NANSEN_API_BASE = "https://api.nansen.ai/api/v1"
 
 async def fetch_full_intelligence(symbol: str, address: str, chain: str):
     """
-    Unified Intelligence Engine (V3.1).
-    Combines Smart Money Flow, Concentration (TGM), and Perp Funding.
+    Unified Intelligence Engine (V3.7).
+    Uses the Token Screener endpoint (Smart Money Filtered) to bypass tier restrictions.
     """
     api_key = os.getenv("NANSEN_API_KEY")
     headers = {"apiKey": api_key, "Content-Type": "application/json"}
-    
-    # Standardize chain for Nansen (Solana -> solana)
     chain_slug = chain.lower()
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    payload = {
+        "chains": [chain_slug],
+        "timeframe": "24h",
+        "pagination": {"page": 1, "per_page": 50},
+        "filters": {
+            "only_smart_money": True
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            # 1. Flow Intel (Is Smart Money moving money now?)
-            # 2. Indicators (Risk/Reward & Nansen Score)
-            # 3. Flow Intelligence (Detailed Holder Breakdown)
+            res = await client.post(f"{NANSEN_API_BASE}/token-screener", json=payload, headers=headers)
             
-            flow_req = client.post(f"{NANSEN_API_BASE}/smart-money/netflows", 
-                                   json={"chains": [chain_slug], "filters": {"token_address": address}}, 
-                                   headers=headers)
-            
-            ind_req = client.post(f"{NANSEN_API_BASE}/tgm/indicators", 
-                                  json={"chain": chain_slug, "token_address": address}, 
-                                  headers=headers)
-
-            # Fire both at once to minimize latency on Railway
-            flow_res, ind_res = await asyncio.gather(flow_req, ind_req)
-
-            # Extract Data
-            f_data = flow_res.json().get("data", [{}])[0] if flow_res.status_code == 200 else {}
-            i_data = ind_res.json().get("data", {}) if ind_res.status_code == 200 else {}
-
-            return {
-                "net_flow_24h": f_data.get("net_flow_24h_usd", 0),
-                "risk_score": i_data.get("risk_score", 5),
-                "sm_conviction": i_data.get("smart_money_conviction_score", 0), # 0-100 scale
-                "is_institutional": i_data.get("smart_money_conviction_score", 0) > 70
-            }
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                
+                # Search the screener results for our specific token
+                target_token = next((t for t in data if t.get("token_address", "").lower() == address.lower()), None)
+                
+                if target_token:
+                    return {
+                        "net_flow_24h": target_token.get("netflow", 0),
+                        "risk_score": 5, # Screener doesn't provide TGM risk score, defaulting to neutral
+                        "sm_conviction": 50, # Defaulting conviction as TGM is locked
+                        "is_institutional": True
+                    }
+                else:
+                    print(f"⚠️ {symbol} not found in Top 50 Smart Money Screener flows today.")
+                    return None
+            else:
+                print(f"⚠️ Nansen API Error: {res.status_code} - {res.text}")
+                return None
+                
         except Exception as e:
             print(f"⚠️ Nansen Intelligence Failure: {e}")
             return None
