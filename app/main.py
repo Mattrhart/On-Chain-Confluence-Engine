@@ -8,7 +8,7 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="3.6")
+app = FastAPI(title="Sovereign Confluence Engine", version="4.0")
 
 # --- THE INSTITUTIONAL WATCHLIST & SECTOR MAP ---
 TOKEN_MAP = {
@@ -39,7 +39,7 @@ async def root():
 async def health_check():
     health_report = {
         "status": "healthy",
-        "version": "3.6",
+        "version": "4.0",
         "api_connectivity_matrix": {}
     }
     
@@ -54,17 +54,7 @@ async def health_check():
         except Exception as e:
             health_report["api_connectivity_matrix"]["alphavantage"] = f"OFFLINE: {str(e)}"
 
-        # 2. Test FMP Integration
-        try:
-            fmp_key = os.getenv("FMP_API_KEY", "iYdmc43pzwqT7sETRC8pwVG7mIqDTNXI")
-            fmp_res = await client.get(f"https://financialmodelingprep.com/api/v3/economic_calendar?limit=1&apikey={fmp_key}")
-            health_report["api_connectivity_matrix"]["fmp"] = (
-                "CONNECTED" if fmp_res.status_code == 200 else "AUTH_FAILED"
-            )
-        except Exception as e:
-            health_report["api_connectivity_matrix"]["fmp"] = f"OFFLINE: {str(e)}"
-
-       # 3. Test Nansen Integration
+        # 2. Test Nansen Integration (Screener Tier)
         try:
             nan_key = os.getenv("NANSEN_API_KEY")
             nan_payload = {
@@ -141,42 +131,6 @@ async def check_forex_news_risk(symbol: str) -> dict:
         except: pass
     return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News API timeout", "headline": "API Fetch Failed"}
 
-async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
-    api_key = os.getenv("FMP_API_KEY", "iYdmc43pzwqT7sETRC8pwVG7mIqDTNXI")
-    today = datetime.date.today().isoformat()
-    url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={api_key}"
-    
-    base_currency, quote_currency = symbol.split("_")
-    trade_dir = direction.upper()
-
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        try:
-            res = await client.get(url)
-            if res.status_code == 200:
-                events = res.json()
-                macro_events = [e for e in events if e.get("impact") == "High" and e.get("currency") in [base_currency, quote_currency] and e.get("actual") is not None]
-                
-                if not macro_events:
-                    return {"action": "EXECUTE", "reason": "No High-Impact events scheduled for today.", "event_checked": "Quiet Calendar"}
-
-                top_event = macro_events[0].get("event", "Unknown Event")
-
-                for event in macro_events:
-                    try:
-                        actual, estimate = float(event["actual"]), float(event.get("estimate", event["actual"]))
-                        is_positive = actual > estimate
-                        
-                        if event["currency"] == base_currency:
-                            if trade_dir == "BUY" and not is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} weakened {base_currency}.", "event_checked": event['event']}
-                            if trade_dir == "SHORT" and is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} strengthened {base_currency}.", "event_checked": event['event']}
-                        elif event["currency"] == quote_currency:
-                            if trade_dir == "BUY" and is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} strengthened {quote_currency}.", "event_checked": event['event']}
-                            if trade_dir == "SHORT" and not is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} weakened {quote_currency}.", "event_checked": event['event']}
-                    except: continue
-                return {"action": "EXECUTE", "reason": "Intraday data aligned with trade direction.", "event_checked": top_event}
-        except: pass
-    return {"action": "EXECUTE", "reason": "FMP API timeout", "event_checked": "None"}
-
 # --- WEBHOOK LAYER ---
 
 @app.post("/webhook/tradingview")
@@ -193,18 +147,16 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
     if is_forex:
         sector = "Global FX Market"
         av_intel = await check_forex_news_risk(symbol)
-        fmp_intel = await evaluate_fmp_macro_direction(symbol, payload.direction)
         
-        base_note = f"📰 Latest: {av_intel['headline']}\n📅 Calendar Focus: {fmp_intel['event_checked']}"
+        base_note = f"📰 Latest: {av_intel['headline']}"
         
         if av_intel["risk_score"] >= 8.0:
             decision, stars, reasoning = "ABORT", "⚠️", f"🛑 {av_intel['reason']}\n{base_note}"
-        elif fmp_intel["action"] == "ABORT":
-            decision, stars, reasoning = "ABORT", "⚠️", f"🛑 {fmp_intel['reason']}\n{base_note}"
         else:
             reasoning = f"✅ Macro Clear.\n{base_note}"
             if "BULLISH" in av_intel["sentiment"] and payload.direction.upper() == "BUY": stars = "⭐⭐⭐⭐⭐"
             if "BEARISH" in av_intel["sentiment"] and payload.direction.upper() == "SHORT": stars = "⭐⭐⭐⭐⭐"
+            
         metric_display = f"AV: {av_intel['sentiment']}"
 
     else:
@@ -259,7 +211,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
-        f"📈 <i>Confluence Engine V3.6</i>"
+        f"📈 <i>Confluence Engine V4.0</i>"
     )
 
     background_tasks.add_task(send_telegram_notification, rich_message)
