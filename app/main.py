@@ -8,9 +8,8 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="3.4")
+app = FastAPI(title="Sovereign Confluence Engine", version="3.5")
 
-# --- THE INSTITUTIONAL WATCHLIST & SECTOR MAP ---
 TOKEN_MAP = {
     "ETH":  {"chain": "ethereum", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "sector": "L1 / Blue-Chip"},
     "BNB":  {"chain": "bnb",      "address": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "sector": "L1 / Exchange"},
@@ -32,7 +31,7 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "version": "3.4"}
+    return {"status": "healthy", "version": "3.5"}
 
 # --- PUBLIC API GUARD LAYERS ---
 
@@ -48,16 +47,6 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
                 return sum([float(pool.get("attributes", {}).get("reserve_in_usd", 0.0)) for pool in data])
         except: pass
     return 1000000.0
-
-async def check_binance_open_interest(symbol: str) -> float:
-    binance_symbol = "BTCUSDT" if symbol == "WBTC" else f"{symbol}USDT"
-    url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={binance_symbol}"
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            res = await client.get(url)
-            if res.status_code == 200: return float(res.json().get("openInterest", 0.0))
-        except: pass
-    return 0.0
 
 # --- FOREX INTELLIGENCE LAYERS ---
 
@@ -91,7 +80,6 @@ async def check_forex_news_risk(symbol: str) -> dict:
                 
                 base_sentiment = feed[0].get("overall_sentiment_label", "NEUTRAL")
                 
-                # DYNAMIC RETURN STATEMENTS
                 if total_drag >= 8.0:
                     return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": f"OVERHANG: '{latest_shock['title']}' ({latest_shock['days']}d ago)"}
                 elif total_drag >= 4.0:
@@ -155,7 +143,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         av_intel = await check_forex_news_risk(symbol)
         fmp_intel = await evaluate_fmp_macro_direction(symbol, payload.direction)
         
-        # DYNAMIC REASONING BUILDING
         base_note = f"📰 Latest: {av_intel['headline']}\n📅 Calendar Focus: {fmp_intel['event_checked']}"
         
         if av_intel["risk_score"] >= 8.0:
@@ -182,15 +169,13 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             sector = token_info.get("sector", "Independent Asset")
             metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
             pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
-            oi_usd = await check_binance_open_interest(symbol)
         else:
-            sector, metrics, pool_liquidity, oi_usd = "Unmapped Asset", None, 1000000.0, 0.0
+            sector, metrics, pool_liquidity = "Unmapped Asset", None, 1000000.0
 
         if metrics:
             flow, risk, conv, direction = metrics["net_flow_24h"], metrics["risk_score"], metrics["sm_conviction"], payload.direction.upper()
             
-            # DYNAMIC CRYPTO CONTEXT INJECTION
-            base_note = f"💧 Pool Depth: ${pool_liquidity/1e3:,.0f}k | 📜 Binance OI: ${oi_usd/1e6:,.1f}M"
+            base_note = f"💧 Pool Depth: ${pool_liquidity/1e3:,.0f}k"
 
             if risk >= 8:
                 decision, stars, reasoning = "ABORT", "⚠️", f"🛑 HIGH RISK: Nansen score critically high ({risk}/10).\n{base_note}"
@@ -211,16 +196,17 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
     
+    # Fully converted to Crash-Proof HTML formatting
     rich_message = (
-        f"{'🟩' if decision == 'EXECUTE' else '🟥'} *DECISION: {decision}*\n"
+        f"{'🟩' if decision == 'EXECUTE' else '🟥'} <b>DECISION: {decision}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"💎 *Asset:* `${symbol}`\n🏷️ *Sector:* `{sector}`\n📊 *TF:* `{payload.timeframe}m` | *Price:* `${price_display}`\n"
+        f"💎 <b>Asset:</b> <code>${symbol}</code>\n🏷️ <b>Sector:</b> <code>{sector}</code>\n📊 <b>TF:</b> <code>{payload.timeframe}m</code> | <b>Price:</b> <code>${price_display}</code>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{'🌍 *MACRO TELEMETRY*' if is_forex else '🛡️ *ON-CHAIN INTELLIGENCE*'}\n"
-        f"• Status: `{metric_display}`\n• Conviction: {stars}\n"
+        f"{'🌍 <b>MACRO TELEMETRY</b>' if is_forex else '🛡️ <b>ON-CHAIN INTELLIGENCE</b>'}\n"
+        f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"📝 *Analyst Brief:*\n{reasoning.replace('_', '\\_')}\n"
-        f"📈 _Confluence Engine V3.4_"
+        f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
+        f"📈 <i>Confluence Engine V3.5</i>"
     )
 
     background_tasks.add_task(send_telegram_notification, rich_message)

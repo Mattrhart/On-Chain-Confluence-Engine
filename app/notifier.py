@@ -11,11 +11,10 @@ async def send_telegram_notification(message: str):
             response = await client.post(url, json={
                 "chat_id": chat_id, 
                 "text": message, 
-                "parse_mode": "Markdown",
+                "parse_mode": "HTML",  # Switched to HTML to prevent headline parsing crashes
                 "disable_web_page_preview": True
             })
             
-            # If Telegram rejects the message (Status 400, 401, etc.)
             if response.status_code != 200:
                 print(f"🔥 TELEGRAM REJECTED MESSAGE: {response.text}")
                 print(f"🔥 RAW MESSAGE ATTEMPTED:\n{message}")
