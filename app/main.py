@@ -8,9 +8,17 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="4.0")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.0")
 
-# --- THE INSTITUTIONAL WATCHLIST & SECTOR MAP ---
+# --- THE AUTO-ROUTING CORRELATION MATRIX ---
+CRYPTO_CLEAN_MAP = {
+    "BTC": "WBTC", "BTCUSD": "WBTC", "BTCUSDT": "WBTC",
+    "ETH": "ETH",  "ETHUSD": "ETH",  "ETHUSDT": "ETH",
+    "SOL": "SOL",  "SOLUSD": "SOL",  "SOLUSDT": "SOL",
+    "BNB": "BNB",  "HYPE": "HYPE",   "LINK": "LINK",
+    "PEPE": "PEPE", "AERO": "AERO",   "LDO": "LDO"
+}
+
 TOKEN_MAP = {
     "ETH":  {"chain": "ethereum", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "sector": "L1 / Blue-Chip"},
     "BNB":  {"chain": "bnb",      "address": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "sector": "L1 / Exchange"},
@@ -23,6 +31,18 @@ TOKEN_MAP = {
     "LDO":  {"chain": "ethereum", "address": "0x5a98781ae4372f810be444d32c815bc0c612b5e1", "sector": "LSD / Staking"}
 }
 
+# Dynamic Keyword Mapping based on Ticker Breakdown
+CURRENCY_KEYWORDS = {
+    "USD": ["fed", "fomc", "powell", "dollar", "cpi", "nfp", "nonfarm", "treasury", "warsh"],
+    "EUR": ["ecb", "lagarde", "eurozone", "euro", "inflation euro"],
+    "GBP": ["boe", "bailey", "sterling", "pound", "uk economy"],
+    "CHF": ["snb", "franc", "swiss", "kordan"],
+    "JPY": ["boj", "yen", "ueda", "tokyo", "intervene"],
+    "AUD": ["rba", "aussie", "australian"],
+    "CAD": ["boc", "loonie", "canadian"],
+    "NZD": ["rbnz", "kiwi", "zealand"]
+}
+
 class TradingViewPayload(BaseModel):
     ticker: str
     price: float
@@ -32,53 +52,26 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "Engine Active", "port": int(os.getenv("PORT", 8080))}
+    return {"status": "Engine V5.0 Active"}
 
-# --- CRASH-PROOF DIAGNOSTIC MATRIX ---
 @app.get("/health")
 async def health_check():
-    health_report = {
-        "status": "healthy",
-        "version": "4.0",
-        "api_connectivity_matrix": {}
-    }
-    
+    health_report = {"status": "healthy", "version": "5.0", "api_connectivity_matrix": {}}
     async with httpx.AsyncClient(timeout=4.0) as client:
-        # 1. Test Alpha Vantage Integration
         try:
-            av_key = os.getenv("ALPHA_VANTAGE_KEY", "FNZA72FMXYIDU7VJ")
+            av_key = os.getenv("ALPHA_VANTAGE_KEY")
             av_res = await client.get(f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&limit=1&apikey={av_key}")
-            health_report["api_connectivity_matrix"]["alphavantage"] = (
-                "CONNECTED" if av_res.status_code == 200 and "feed" in av_res.json() else "AUTH_FAILED"
-            )
-        except Exception as e:
-            health_report["api_connectivity_matrix"]["alphavantage"] = f"OFFLINE: {str(e)}"
-
-        # 2. Test Nansen Integration (Screener Tier)
+            health_report["api_connectivity_matrix"]["alphavantage"] = "CONNECTED" if av_res.status_code == 200 else "AUTH_FAILED"
+        except: health_report["api_connectivity_matrix"]["alphavantage"] = "OFFLINE"
         try:
             nan_key = os.getenv("NANSEN_API_KEY")
-            nan_payload = {
-                "chains": ["ethereum"],
-                "timeframe": "24h",
-                "pagination": {"page": 1, "per_page": 1}
-            }
-            nan_res = await client.post(
-                "https://api.nansen.ai/api/v1/token-screener",
-                json=nan_payload,
-                headers={"apiKey": nan_key, "Content-Type": "application/json"}
-            )
-            health_report["api_connectivity_matrix"]["nansen"] = (
-                "CONNECTED" if nan_res.status_code == 200 else f"AUTH_FAILED ({nan_res.status_code})"
-            )
-        except Exception as e:
-            health_report["api_connectivity_matrix"]["nansen"] = f"OFFLINE: {str(e)}"
-
+            nan_res = await client.post("https://api.nansen.ai/api/v1/token-screener", json={"chains": ["ethereum"], "timeframe": "24h", "pagination": {"page": 1, "per_page": 1}}, headers={"apiKey": nan_key, "Content-Type": "application/json"})
+            health_report["api_connectivity_matrix"]["nansen"] = "CONNECTED" if nan_res.status_code == 200 else "AUTH_FAILED"
+        except: health_report["api_connectivity_matrix"]["nansen"] = "OFFLINE"
     return health_report
 
-# --- PUBLIC API GUARD LAYERS ---
-
 async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
-    if chain.lower() == "solana": return 5000000.0 
+    if chain.lower() == "solana": return 5000000.0
     url = f"https://api.geckoterminal.com/api/v2/networks/{chain.lower()}/tokens/{address}/pools?page=1"
     headers = {"Accept": "application/json;version=20230302"}
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -90,113 +83,127 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
         except: pass
     return 1000000.0
 
-# --- FOREX INTELLIGENCE LAYERS ---
-
-async def check_forex_news_risk(symbol: str) -> dict:
-    api_key = os.getenv("ALPHA_VANTAGE_KEY", "FNZA72FMXYIDU7VJ")
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=economy_macro&sort=LATEST&limit=25&apikey={api_key}"
+# --- SMART RELEVANCE FOREX FILTER ---
+async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str) -> dict:
+    api_key = os.getenv("ALPHA_VANTAGE_KEY")
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=economy_macro&sort=LATEST&limit=50&apikey={api_key}"
     
+    base_keys = CURRENCY_KEYWORDS.get(base_ccy, [])
+    quote_keys = CURRENCY_KEYWORDS.get(quote_ccy, [])
+    target_keys = base_keys + quote_keys
+
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
             res = await client.get(url)
             if res.status_code == 200:
                 feed = res.json().get("feed", [])
-                if not feed:
-                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "No news data", "headline": "No recent macro articles published."}
                 
-                top_headline = feed[0].get("title", "Unknown Headline")
-                critical_keywords = ["fomc", "fed rate", "cpi print", "nonfarm", "nfp", "inflation shock", "ecb", "boe", "powell"]
-                total_drag, latest_shock, now = 0.0, None, datetime.datetime.now()
+                # Sift out corporate noise - keep only headlines containing asset-relevant macro tokens
+                relevant_articles = []
+                for a in feed:
+                    title_lower = a.get("title", "").lower()
+                    summary_lower = a.get("summary", "").lower()
+                    if any(tk in title_lower or tk in summary_lower for tk in target_keys):
+                        relevant_articles.append(a)
 
-                for article in feed:
-                    pub_time_str = article.get("time_published", "")
-                    if not pub_time_str: continue
-                    try: days_old = (now - datetime.datetime.strptime(pub_time_str, "%Y%m%dT%H%M%S")).days
+                if not relevant_articles:
+                    return {
+                        "risk_score": 0.0, "sentiment": "NEUTRAL", 
+                        "headline": f"No structural macro events targeting {base_ccy}/{quote_ccy} currently.",
+                        "brief": f"Macro landscape calm. Trading environment dictated strictly by local order-flow liquidity."
+                    }
+                
+                top_article = relevant_articles[0]
+                headline = top_article.get("title")
+                sentiment_label = top_article.get("overall_sentiment_label", "NEUTRAL")
+                sentiment_score = float(top_article.get("overall_sentiment_score", 0.0))
+
+                # Assess systemic shock via velocity calculations
+                total_drag = 0.0
+                critical_shocks = ["fomc", "fed rate", "cpi", "nfp", "nonfarm", "interest rate"]
+                now = datetime.datetime.now()
+
+                for art in relevant_articles[:10]:
+                    p_str = art.get("time_published", "")
+                    if not p_str: continue
+                    try: days_old = (now - datetime.datetime.strptime(p_str, "%Y%m%dT%H%M%S")).days
                     except: days_old = 0
+                    
+                    if any(ck in art.get("title", "").lower() for ck in critical_shocks):
+                        total_drag += 6.0 * (0.75 ** days_old)
 
-                    if any(kw in article.get("title", "").lower() for kw in critical_keywords):
-                        shock_value = 10.0 * max(0.1, (0.8 ** days_old))
-                        total_drag += shock_value
-                        if not latest_shock or shock_value > latest_shock['value']:
-                            latest_shock = {"value": shock_value, "days": days_old, "title": article.get("title")}
-                
-                base_sentiment = feed[0].get("overall_sentiment_label", "NEUTRAL")
-                
-                if total_drag >= 8.0:
-                    return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": f"OVERHANG: '{latest_shock['title']}' ({latest_shock['days']}d ago)"}
-                elif total_drag >= 4.0:
-                    return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": f"Residual Drag: '{latest_shock['title']}' ({latest_shock['days']}d ago)"}
+                # Formulate dynamic quantitative brief text
+                brief_text = f"Monetary drivers for {base_ccy} print as {sentiment_label}. "
+                if abs(sentiment_score) > 0.15:
+                    brief_text += f"Active fundamental imbalances detected; positional risk profile elevated."
                 else:
-                    return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": "No high-impact historical shocks detected."}
+                    brief_text += f"News flow is structural but steady; execution environment within nominal parameters."
+
+                return {"risk_score": total_drag, "sentiment": sentiment_label, "headline": headline, "brief": brief_text}
         except: pass
-    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News API timeout", "headline": "API Fetch Failed"}
+    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "headline": "Macro Pipeline Timeout", "brief": "Executing blindly on fallback protocol."}
 
-# --- WEBHOOK LAYER ---
-
+# --- UNIFIED INTELLIGENT WEBHOOK ---
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
 async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
     if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"): raise HTTPException(status_code=401)
 
-    raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "")
-    is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"} and raw_ticker[3:] in {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
-    symbol = f"{raw_ticker[:3]}_{raw_ticker[3:]}" if is_forex else raw_ticker
-
-    decision, stars = "EXECUTE", "⭐⭐⭐"
+    raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
     
+    is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
+    decision, stars, reasoning = "EXECUTE", "⭐⭐⭐", ""
+
     if is_forex:
-        sector = "Global FX Market"
-        av_intel = await check_forex_news_risk(symbol)
+        base_ccy, quote_ccy = raw_ticker[:3], raw_ticker[3:]
+        symbol = f"{base_ccy}_{quote_ccy}"
+        sector = f"Global FX | {base_ccy}-{quote_ccy} Cross"
         
+        av_intel = await check_forex_news_risk(symbol, base_ccy, quote_ccy)
+        metric_display = f"AV: {av_intel['sentiment']}"
         base_note = f"📰 Latest: {av_intel['headline']}"
-        
+
         if av_intel["risk_score"] >= 8.0:
-            decision, stars, reasoning = "ABORT", "⚠️", f"🛑 {av_intel['reason']}\n{base_note}"
+            decision, stars, reasoning = "ABORT", "⚠️", f"🛑 MACRO RISK SHOCK: Systemic headline volatility detected.\n{base_note}"
         else:
-            reasoning = f"✅ Macro Clear.\n{base_note}"
+            reasoning = f"✅ {av_intel['brief']}\n{base_note}"
             if "BULLISH" in av_intel["sentiment"] and payload.direction.upper() == "BUY": stars = "⭐⭐⭐⭐⭐"
             if "BEARISH" in av_intel["sentiment"] and payload.direction.upper() == "SHORT": stars = "⭐⭐⭐⭐⭐"
-            
-        metric_display = f"AV: {av_intel['sentiment']}"
 
     else:
-        crypto_root = raw_ticker.split(":")[-1].replace(".P", "")
+        # Dynamic Crypto Core Clean Mapping Lookup
+        lookup_key = raw_ticker.split(":")[-1]
         for stable in ["USDT", "USDC", "USD"]:
-            if crypto_root.endswith(stable) and crypto_root != stable:
-                crypto_root = crypto_root[:-len(stable)]
+            if lookup_key.endswith(stable) and lookup_key != stable:
+                lookup_key = lookup_key[:-len(stable)]
                 break
         
-        symbol = crypto_root
+        symbol = CRYPTO_CLEAN_MAP.get(lookup_key, lookup_key)
         token_info = TOKEN_MAP.get(symbol)
 
         if token_info:
-            sector = token_info.get("sector", "Independent Asset")
+            sector = token_info.get("sector")
             metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
             pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
         else:
             sector, metrics, pool_liquidity = "Unmapped Asset", None, 1000000.0
 
         if metrics:
-            flow, risk, conv, direction = metrics["net_flow_24h"], metrics["risk_score"], metrics["sm_conviction"], payload.direction.upper()
-            
+            flow, risk, direction = metrics["net_flow_24h"], metrics["risk_score"], payload.direction.upper()
             base_note = f"💧 Pool Depth: ${pool_liquidity/1e3:,.0f}k"
 
-            if risk >= 8:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 HIGH RISK: Nansen score critically high ({risk}/10).\n{base_note}"
-            elif pool_liquidity < 250000.0:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 ILLIQUID POOL TRAP: DEX depth too thin.\n{base_note}"
+            if pool_liquidity < 250000.0:
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 ILLIQUID POOL TRAP: DEX liquidity too thin for safe execution.\n{base_note}"
             elif direction == "BUY" and flow < -2000000:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 LIQUIDITY TRAP: Smart Money dumping.\n{base_note}"
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 LIQUIDITY OVERHANG: Smart money distribution detected via active selling.\n{base_note}"
             elif direction == "SHORT" and flow > 2000000:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 CONTRA-TREND: Whales accumulating.\n{base_note}"
-            elif conv > 75 and flow > 3000000:
-                stars, reasoning = "⭐⭐⭐⭐⭐", f"🔥 HIGH CONVICTION BUY.\n{base_note}"
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 CONTRA-TREND TRAP: Heavy institutional whale accumulation underway.\n{base_note}"
             else:
-                reasoning = f"✅ On-chain stable.\n{base_note}"
+                reasoning = f"✅ Network capital maps clean. Flows support local trend framework.\n{base_note}"
 
-            metric_display = f"${flow/1e6:+.1f}M Flow | Risk: {risk}"
+            metric_display = f"${flow/1e6:+.1f}M Flow"
         else:
-            metric_display, reasoning = "No On-Chain Analytics Available", "Technical execution based purely on raw metrics."
+            metric_display, reasoning = "On-Chain Out of Bounds", "Technical layout execution bypass due to unmapped smart contract topology."
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
     
@@ -211,8 +218,9 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
-        f"📈 <i>Confluence Engine V4.0</i>"
+        f"📈 <i>Confluence Engine V5.0</i>"
     )
 
+    # CRITICAL INSTRUCTION MATCH: Pushes alert to Telegram whether decision is EXECUTE or ABORT
     background_tasks.add_task(send_telegram_notification, rich_message)
     return {"status": "success", "decision": decision}
