@@ -8,7 +8,7 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="3.2")
+app = FastAPI(title="Sovereign Confluence Engine", version="3.4")
 
 # --- THE INSTITUTIONAL WATCHLIST & SECTOR MAP ---
 TOKEN_MAP = {
@@ -19,7 +19,7 @@ TOKEN_MAP = {
     "WBTC": {"chain": "ethereum", "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", "sector": "Market Anchor"},
     "LINK": {"chain": "ethereum", "address": "0x514910771af9ca656af840dff83e8264ecf986ca", "sector": "Oracle / Infra"},
     "PEPE": {"chain": "ethereum", "address": "0x6982508145454ce325ddbe47a25d4ec3d2311933", "sector": "Meme / Beta"},
-    "AERO": {"chain": "base",     "address": "0x94018130d51403512255c276587be09d43526f8d", "sector": "L2 / DEX"},
+    "AERO": {"chain": "base",     "address": "0x94018130d41403512255c276587be09d43526f8d", "sector": "L2 / DEX"},
     "LDO":  {"chain": "ethereum", "address": "0x5a98781ae4372f810be444d32c815bc0c612b5e1", "sector": "LSD / Staking"}
 }
 
@@ -30,32 +30,40 @@ class TradingViewPayload(BaseModel):
     timeframe: str
     secret_token: str
 
-# --- SYSTEM ENDPOINTS ---
-
-@app.get("/")
-async def root():
-    return {"status": "Engine Active", "port": int(os.getenv("PORT", 8080))}
-
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "engine_version": "3.2",
-        "nansen_connectivity": True if os.getenv("NANSEN_API_KEY") else False,
-        "alphavantage_connectivity": True if os.getenv("ALPHA_VANTAGE_KEY") else False,
-        "fmp_connectivity": True if os.getenv("FMP_API_KEY") else False
-    }
+    return {"status": "healthy", "version": "3.4"}
 
-# --- INTELLIGENCE LAYERS ---
+# --- PUBLIC API GUARD LAYERS ---
+
+async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
+    if chain.lower() == "solana": return 5000000.0 
+    url = f"https://api.geckoterminal.com/api/v2/networks/{chain.lower()}/tokens/{address}/pools?page=1"
+    headers = {"Accept": "application/json;version=20230302"}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            res = await client.get(url, headers=headers)
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                return sum([float(pool.get("attributes", {}).get("reserve_in_usd", 0.0)) for pool in data])
+        except: pass
+    return 1000000.0
+
+async def check_binance_open_interest(symbol: str) -> float:
+    binance_symbol = "BTCUSDT" if symbol == "WBTC" else f"{symbol}USDT"
+    url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={binance_symbol}"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            res = await client.get(url)
+            if res.status_code == 200: return float(res.json().get("openInterest", 0.0))
+        except: pass
+    return 0.0
+
+# --- FOREX INTELLIGENCE LAYERS ---
 
 async def check_forex_news_risk(symbol: str) -> dict:
-    """
-    Advanced Engine: Scans headlines and applies a Time-Decay (Half-Life) 
-    to historical macroeconomic shocks.
-    """
     api_key = os.getenv("ALPHA_VANTAGE_KEY", "FNZA72FMXYIDU7VJ")
-    av_ticker = f"FX:{symbol.replace('_', '')}"
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={av_ticker}&sort=LATEST&limit=15&apikey={api_key}"
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=economy_macro&sort=LATEST&limit=25&apikey={api_key}"
     
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
@@ -63,68 +71,37 @@ async def check_forex_news_risk(symbol: str) -> dict:
             if res.status_code == 200:
                 feed = res.json().get("feed", [])
                 if not feed:
-                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "No historical news drag"}
+                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "No news data", "headline": "No recent macro articles published."}
                 
-                critical_keywords = ["fomc", "fed rate", "cpi print", "nonfarm", "nfp", "inflation shock", "ecb", "boe"]
-                
-                total_drag = 0.0
-                latest_shock = None
-                now = datetime.datetime.now()
+                top_headline = feed[0].get("title", "Unknown Headline")
+                critical_keywords = ["fomc", "fed rate", "cpi print", "nonfarm", "nfp", "inflation shock", "ecb", "boe", "powell"]
+                total_drag, latest_shock, now = 0.0, None, datetime.datetime.now()
 
                 for article in feed:
                     pub_time_str = article.get("time_published", "")
-                    if not pub_time_str:
-                        continue
-                        
-                    try:
-                        pub_time = datetime.datetime.strptime(pub_time_str, "%Y%m%dT%H%M%S")
-                        days_old = (now - pub_time).days
-                    except:
-                        days_old = 0
+                    if not pub_time_str: continue
+                    try: days_old = (now - datetime.datetime.strptime(pub_time_str, "%Y%m%dT%H%M%S")).days
+                    except: days_old = 0
 
-                    # DECAY FORMULA: Weight drops every day
-                    decay_multiplier = max(0.1, (0.8 ** days_old)) 
-                    title = article.get("title", "").lower()
-
-                    if any(kw in title for kw in critical_keywords):
-                        shock_value = 10.0 * decay_multiplier
+                    if any(kw in article.get("title", "").lower() for kw in critical_keywords):
+                        shock_value = 10.0 * max(0.1, (0.8 ** days_old))
                         total_drag += shock_value
-                        
                         if not latest_shock or shock_value > latest_shock['value']:
-                            latest_shock = {
-                                "value": shock_value, 
-                                "days": days_old, 
-                                "title": article.get("title")[:30]
-                            }
+                            latest_shock = {"value": shock_value, "days": days_old, "title": article.get("title")}
                 
                 base_sentiment = feed[0].get("overall_sentiment_label", "NEUTRAL")
-
+                
+                # DYNAMIC RETURN STATEMENTS
                 if total_drag >= 8.0:
-                    return {
-                        "risk_score": total_drag, 
-                        "sentiment": base_sentiment, 
-                        "reason": f"CRITICAL OVERHANG: {latest_shock['title']}... ({latest_shock['days']} days ago) still dragging asset."
-                    }
+                    return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": f"OVERHANG: '{latest_shock['title']}' ({latest_shock['days']}d ago)"}
                 elif total_drag >= 4.0:
-                    return {
-                        "risk_score": total_drag, 
-                        "sentiment": base_sentiment, 
-                        "reason": f"Residual Macro Drag active from {latest_shock['days']} days ago. Proceed with caution."
-                    }
+                    return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": f"Residual Drag: '{latest_shock['title']}' ({latest_shock['days']}d ago)"}
                 else:
-                    return {
-                        "risk_score": total_drag, 
-                        "sentiment": base_sentiment, 
-                        "reason": "Historical macro timeline clear."
-                    }
-                    
-        except Exception as e:
-            print(f"⚠️ Alpha Vantage Error: {e}")
-            
-    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News API timeout"}
+                    return {"risk_score": total_drag, "sentiment": base_sentiment, "headline": top_headline, "reason": "No high-impact historical shocks detected."}
+        except: pass
+    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "reason": "News API timeout", "headline": "API Fetch Failed"}
 
 async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
-    """Dynamic Cross-Pair Macro Engine."""
     api_key = os.getenv("FMP_API_KEY", "iYdmc43pzwqT7sETRC8pwVG7mIqDTNXI")
     today = datetime.date.today().isoformat()
     url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey={api_key}"
@@ -137,145 +114,113 @@ async def evaluate_fmp_macro_direction(symbol: str, direction: str) -> dict:
             res = await client.get(url)
             if res.status_code == 200:
                 events = res.json()
+                macro_events = [e for e in events if e.get("impact") == "High" and e.get("currency") in [base_currency, quote_currency] and e.get("actual") is not None]
                 
-                macro_events = [
-                    e for e in events 
-                    if e.get("impact") == "High" 
-                    and e.get("currency") in [base_currency, quote_currency]
-                    and e.get("actual") is not None 
-                    and e.get("estimate") is not None
-                ]
+                if not macro_events:
+                    return {"action": "EXECUTE", "reason": "No High-Impact events scheduled for today.", "event_checked": "Quiet Calendar"}
+
+                top_event = macro_events[0].get("event", "Unknown Event")
 
                 for event in macro_events:
                     try:
-                        actual = float(event["actual"])
-                        estimate = float(event["estimate"])
-                        event_currency = event["currency"]
+                        actual, estimate = float(event["actual"]), float(event.get("estimate", event["actual"]))
+                        is_positive = actual > estimate
                         
-                        is_positive_surprise = actual > estimate
-                        
-                        if event_currency == base_currency:
-                            base_strengthened = is_positive_surprise
-                            if trade_dir == "BUY" and not base_strengthened:
-                                return {"action": "ABORT", "reason": f"Macro Conflict: {event['event']} weakened base {base_currency}."}
-                            if trade_dir == "SHORT" and base_strengthened:
-                                return {"action": "ABORT", "reason": f"Macro Conflict: {event['event']} strengthened base {base_currency}."}
-                        
-                        elif event_currency == quote_currency:
-                            quote_strengthened = is_positive_surprise
-                            if trade_dir == "BUY" and quote_strengthened:
-                                return {"action": "ABORT", "reason": f"Macro Conflict: {event['event']} strengthened counter {quote_currency}."}
-                            if trade_dir == "SHORT" and not quote_strengthened:
-                                return {"action": "ABORT", "reason": f"Macro Conflict: {event['event']} weakened counter {quote_currency}."}
-                            
-                    except (ValueError, TypeError):
-                        continue
-        except Exception as e:
-            print(f"⚠️ FMP Macro Engine Error: {e}")
-            
-    return {"action": "EXECUTE", "reason": "Macro context aligned"}
+                        if event["currency"] == base_currency:
+                            if trade_dir == "BUY" and not is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} weakened {base_currency}.", "event_checked": event['event']}
+                            if trade_dir == "SHORT" and is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} strengthened {base_currency}.", "event_checked": event['event']}
+                        elif event["currency"] == quote_currency:
+                            if trade_dir == "BUY" and is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} strengthened {quote_currency}.", "event_checked": event['event']}
+                            if trade_dir == "SHORT" and not is_positive: return {"action": "ABORT", "reason": f"Conflict: {event['event']} weakened {quote_currency}.", "event_checked": event['event']}
+                    except: continue
+                return {"action": "EXECUTE", "reason": "Intraday data aligned with trade direction.", "event_checked": top_event}
+        except: pass
+    return {"action": "EXECUTE", "reason": "FMP API timeout", "event_checked": "None"}
 
 # --- WEBHOOK LAYER ---
 
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
 async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
-    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"):
-        raise HTTPException(status_code=401)
+    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"): raise HTTPException(status_code=401)
 
-    raw_ticker = payload.ticker.upper().replace("/", "_").replace("-", "_")
-    is_forex = "_" in raw_ticker and len(raw_ticker.split("_")[0]) == 3 and len(raw_ticker.split("_")[1]) == 3
-    
-    decision = "EXECUTE"
-    stars = "⭐⭐⭐"
+    raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "")
+    is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"} and raw_ticker[3:] in {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
+    symbol = f"{raw_ticker[:3]}_{raw_ticker[3:]}" if is_forex else raw_ticker
+
+    decision, stars = "EXECUTE", "⭐⭐⭐"
     
     if is_forex:
-        symbol = raw_ticker
         sector = "Global FX Market"
-        
         av_intel = await check_forex_news_risk(symbol)
         fmp_intel = await evaluate_fmp_macro_direction(symbol, payload.direction)
         
-        print(f"📊 [X-RAY] Alpha Vantage Intel for {symbol}: {av_intel}")
-        print(f"📊 [X-RAY] FMP Macro Intel for {symbol}: {fmp_intel}")
+        # DYNAMIC REASONING BUILDING
+        base_note = f"📰 Latest: {av_intel['headline']}\n📅 Calendar Focus: {fmp_intel['event_checked']}"
         
         if av_intel["risk_score"] >= 8.0:
-            decision = "ABORT"
-            reasoning = f"🛑 {av_intel['reason']}"
-            stars = "⚠️"
+            decision, stars, reasoning = "ABORT", "⚠️", f"🛑 {av_intel['reason']}\n{base_note}"
         elif fmp_intel["action"] == "ABORT":
-            decision = "ABORT"
-            reasoning = f"🛑 {fmp_intel['reason']}"
-            stars = "⚠️"
+            decision, stars, reasoning = "ABORT", "⚠️", f"🛑 {fmp_intel['reason']}\n{base_note}"
         else:
-            reasoning = f"Filters Clear. {av_intel['reason']} | {fmp_intel['reason']}"
-            if av_intel["sentiment"] in ["BULLISH", "VERY_BULLISH"] and payload.direction.upper() == "BUY":
-                stars = "⭐⭐⭐⭐⭐"
-            elif av_intel["sentiment"] in ["BEARISH", "VERY_BEARISH"] and payload.direction.upper() == "SHORT":
-                stars = "⭐⭐⭐⭐⭐"
-
+            reasoning = f"✅ Macro Clear.\n{base_note}"
+            if "BULLISH" in av_intel["sentiment"] and payload.direction.upper() == "BUY": stars = "⭐⭐⭐⭐⭐"
+            if "BEARISH" in av_intel["sentiment"] and payload.direction.upper() == "SHORT": stars = "⭐⭐⭐⭐⭐"
         metric_display = f"AV: {av_intel['sentiment']}"
 
     else:
-        symbol = raw_ticker.split(":")[-1].replace("USDT", "").replace("USDC", "")
+        crypto_root = raw_ticker.split(":")[-1].replace(".P", "")
+        for stable in ["USDT", "USDC", "USD"]:
+            if crypto_root.endswith(stable) and crypto_root != stable:
+                crypto_root = crypto_root[:-len(stable)]
+                break
+        
+        symbol = crypto_root
         token_info = TOKEN_MAP.get(symbol)
 
         if token_info:
             sector = token_info.get("sector", "Independent Asset")
-            metrics = await fetch_full_intelligence(
-                symbol=symbol, 
-                address=token_info.get("address"), 
-                chain=token_info.get("chain")
-            )
+            metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
+            pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
+            oi_usd = await check_binance_open_interest(symbol)
         else:
-            sector = "Unmapped Asset"
-            metrics = None
+            sector, metrics, pool_liquidity, oi_usd = "Unmapped Asset", None, 1000000.0, 0.0
 
         if metrics:
-            flow = metrics["net_flow_24h"]
-            risk = metrics["risk_score"]
-            conviction = metrics["sm_conviction"]
-            direction = payload.direction.upper()
+            flow, risk, conv, direction = metrics["net_flow_24h"], metrics["risk_score"], metrics["sm_conviction"], payload.direction.upper()
+            
+            # DYNAMIC CRYPTO CONTEXT INJECTION
+            base_note = f"💧 Pool Depth: ${pool_liquidity/1e3:,.0f}k | 📜 Binance OI: ${oi_usd/1e6:,.1f}M"
 
             if risk >= 8:
-                decision = "ABORT"
-                reasoning = f"⚠️ HIGH RISK PROFILE: Nansen smart risk score is critically high ({risk}/10)."
-                stars = "⚠️"
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 HIGH RISK: Nansen score critically high ({risk}/10).\n{base_note}"
+            elif pool_liquidity < 250000.0:
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 ILLIQUID POOL TRAP: DEX depth too thin.\n{base_note}"
             elif direction == "BUY" and flow < -2000000:
-                decision = "ABORT"
-                reasoning = f"⚠️ LIQUIDITY TRAP: Technical BUY, but Smart Money sold ${abs(flow)/1e6:.1f}M today."
-                stars = "⚠️"
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 LIQUIDITY TRAP: Smart Money dumping.\n{base_note}"
             elif direction == "SHORT" and flow > 2000000:
-                decision = "ABORT"
-                reasoning = f"⚠️ CONTRA-TREND: Technical SHORT, but Smart Money bought ${flow/1e6:.1f}M today."
-                stars = "⚠️"
-            elif conviction > 75 and flow > 3000000:
-                reasoning = f"🔥 HIGH CONVICTION: Smart Money accumulated and conviction is at {conviction}%."
-                stars = "⭐⭐⭐⭐⭐"
+                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 CONTRA-TREND: Whales accumulating.\n{base_note}"
+            elif conv > 75 and flow > 3000000:
+                stars, reasoning = "⭐⭐⭐⭐⭐", f"🔥 HIGH CONVICTION BUY.\n{base_note}"
             else:
-                reasoning = f"On-chain flow stable. Conviction: {conviction}% | Risk Score: {risk}/10"
+                reasoning = f"✅ On-chain stable.\n{base_note}"
 
             metric_display = f"${flow/1e6:+.1f}M Flow | Risk: {risk}"
         else:
-            metric_display = "No On-Chain Analytics Available"
-            reasoning = f"Trading execution based purely on raw technical signal metrics."
+            metric_display, reasoning = "No On-Chain Analytics Available", "Technical execution based purely on raw metrics."
 
-    # Rich Notification Engine
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
     
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} *DECISION: {decision}*\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"💎 *Asset:* `${symbol}`\n"
-        f"🏷️ *Sector:* `{sector}`\n"
-        f"📊 *TF:* `{payload.timeframe}m` | *Price:* `${price_display}`\n"
+        f"💎 *Asset:* `${symbol}`\n🏷️ *Sector:* `{sector}`\n📊 *TF:* `{payload.timeframe}m` | *Price:* `${price_display}`\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{'🌍 *MACRO & SENTIMENT TELEMETRY*' if is_forex else '🛡️ *ON-CHAIN INTELLIGENCE*'}\n"
-        f"• Status: `{metric_display}`\n"
-        f"• Conviction: {stars}\n"
+        f"{'🌍 *MACRO TELEMETRY*' if is_forex else '🛡️ *ON-CHAIN INTELLIGENCE*'}\n"
+        f"• Status: `{metric_display}`\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"📝 *Note:* {reasoning}\n"
-        f"📈 _Confluence Engine V3.2_"
+        f"📝 *Analyst Brief:*\n{reasoning.replace('_', '\\_')}\n"
+        f"📈 _Confluence Engine V3.4_"
     )
 
     background_tasks.add_task(send_telegram_notification, rich_message)
