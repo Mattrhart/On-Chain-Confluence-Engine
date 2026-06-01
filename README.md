@@ -1,25 +1,30 @@
-# 🛡️ On-Chain Confluence Engine
+import os
 
-An institutional-grade **Quantitative Alpha Pipeline** that filters high-probability TradingView signals through real-time on-chain analytics. 
+def generate_readme():
+    readme_content = """# 🛡️ On-Chain & Macro Confluence Engine
 
-This engine acts as a "Smart Filter," ensuring that technical expansions (20/50 Ribbon Retests) on major crypto assets are backed by institutional Smart Money flow before notifying the trader via Telegram.
+An institutional-grade **Quantitative Multi-Asset Pipeline** (V4.0) that filters high-probability TradingView signals through real-time on-chain analytics and global macro sentiment. 
+
+This engine acts as an automated "Smart Filter," ensuring that technical setups (e.g., trend retests, structural expansions) are fundamentally backed by institutional capital before executing a trade decision and notifying the trader via Telegram.
 
 ---
 
 ## 🏗️ Technical Architecture
 
-The system is built as a modular, event-driven microservice:
+The system operates as a low-latency, event-driven microservice:
 
-1.  **Ingestion Layer:** FastAPI Webhook listener optimized for low-latency TradingView alerts.
-2.  **Intelligence Layer:** Integration with **Nansen API** to cross-reference technical signals with institutional Net Flow and "Smart Money" accumulation data.
-3.  **Confluence Logic:** A decision-matrix that scales dynamically based on timeframe. It applies a *24h Momentum Filter* for short-term scalps (15m) and a macro *7d God Mode Accumulation Filter* for swing trades.
-4.  **Notification Layer:** Asynchronous Telegram Dispatcher providing instant, Bloomberg-style rich-text trade alerts to mobile via `BackgroundTasks` to prevent server response hanging.
+1.  **Ingestion Layer:** FastAPI Webhook listener optimized for instantaneous processing of TradingView alert payloads.
+2.  **On-Chain Crypto Intelligence:** Integrates with the **Nansen API (Token Screener Pipeline)** to cross-reference crypto signals with 24h net flows, liquidity depth, and active Smart Money accumulation.
+3.  **Forex Macro Telemetry:** Integrates with the **Alpha Vantage Sentiment Engine**. When an FX signal hits, the engine pulls real-time macroeconomic news feeds, sifts out equity market noise, and checks for systemic risk overhangs (FOMC, CPI prints, Non-Farm Payrolls).
+4.  **Confluence Logic Matrix:** A crash-proof decision layer that runs asynchronous risk evaluation. If parameters fail safety checks (e.g., heavy whale dumping or an active macro shock), the engine triggers an immediate **ABORT** command.
+5.  **Notification Layer:** Asynchronous Telegram Dispatcher utilizing FastAPI `BackgroundTasks` to send rich-text, Bloomberg-style trade alerts without hanging web server response times.
 
 ---
 
-## 📊 Supported Assets & On-Chain Sectors
+## 📊 Supported Asset Fields
 
-The Confluence Engine is explicitly configured to pull real-time institutional wallet movements from Nansen for the following asset matrix:
+### 1. Sovereign Crypto Assets (On-Chain Layer)
+The engine queries Nansen's smart-money pipelines for the following specific asset matrix:
 
 | Symbol | Market Sector / Role | Native Chain |
 | :--- | :--- | :--- |
@@ -33,8 +38,10 @@ The Confluence Engine is explicitly configured to pull real-time institutional w
 | **AERO** | L2 Liquidity / Base DEX | Base |
 | **LDO** | Liquid Staking Derivatives | Ethereum |
 
-### ⚠️ Fallback Behavior
-If an alert fires for a symbol **not listed above**, the engine will still seamlessly process the technical breakout and dispatch a notification. However, it will bypass the Nansen API data-fetch and default to a streamlined technical layout to prevent payload errors.
+> ⚠️ **Fallback Behavior:** If an alert fires for an unmapped crypto asset, the engine gracefully bypasses the Nansen call and executes strictly on technical parameters to prevent payload crashes.
+
+### 2. Global Forex Pairs (Macro Sentiment Layer)
+For 6-character fiat tickers (e.g., `EURUSD`, `GBPUSD`), the engine automatically switches to **Macro Telemetry Mode**. It analyzes raw context from global central bank keywords (`powell`, `fed rate`, `ecb`, `boe`) and calculates a rolling risk-decay metric based on article publication age.
 
 ---
 
@@ -42,31 +49,42 @@ If an alert fires for a symbol **not listed above**, the engine will still seaml
 
 * **Language:** Python 3.12+
 * **Framework:** [FastAPI](https://fastapi.tiangolo.com/) (High-performance ASGI framework)
-* **Web Server:** Uvicorn
-* **Data Validation:** Pydantic (Strict typing for incoming TradingView payloads)
-* **Network:** HTTPX (Asynchronous HTTP requests for Telegram and Nansen)
-* **Environment:** Secure `.env` management with `.gitignore` shielding.
+* **Web Server:** Uvicorn (Configurable port binding)
+* **Data Validation:** Pydantic V2 (Strict data-type compliance for incoming signals)
+* **Network Client:** HTTPX (Asynchronous HTTP requests for non-blocking API interactions)
+* **Environment Architecture:** Secure environmental variables handled with dynamic `.env` fallback mapping.
 
 ---
 
-## 🔒 Security & Professional Standards
+## 🔒 Security & Infrastructure Standards
 
-* **Secret Management:** Implements zero-leak protocols by utilizing environment variables for API tokens and Chat IDs.
-* **Git Shielding:** Configured with robust `.gitignore` patterns to prevent exposure of sensitive institutional keys.
-* **Authentication:** Webhook endpoints are protected via a unique `secret_token` handshake to prevent unauthorized signal injection.
+* **Zero-Leak Protocols:** Strict reliance on production environment injections; zero hardcoding of sensitive parameters.
+* **Authentication Handshake:** Endpoints are secured via a mandatory, customizable `secret_token` string verified before ingestion logic fires.
+* **Dynamic Routing:** Automatically detects deployment ports via cloud provider assignments (e.g., Railway variables) while maintaining local testing fallbacks.
 
 ---
 
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
-* A Nansen API Key
-* A Telegram Bot Token (via @BotFather)
+* A Nansen API Key (Screener endpoints unlocked)
+* An Alpha Vantage API Key (Free Tier supported)
+* A Telegram Bot Token & Target Chat ID
 
-### 2. Configuration
-Clone the repository and create a `.env` file in the root directory:
+### 2. Local Environment Setup
+Clone the repository and build out your local `.env` profile in the root workspace directory:
+
 ```text
-NANSEN_API_KEY=your_nansen_api_key_here
+# Port Configuration (Defaults to 8080 locally)
+PORT=8080
+
+# Webhook Handshake Protection
 TRADINGVIEW_SECRET=hype_retest_2026
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
+
+# Data Provider Credentials
+NANSEN_API_KEY=nsn_your_paid_key_here
+ALPHA_VANTAGE_KEY=your_alphavantage_key_here
+
+# Notification Parameters
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ
+TELEGRAM_CHAT_ID=-100123456789
