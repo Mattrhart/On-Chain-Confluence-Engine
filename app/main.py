@@ -8,8 +8,9 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="3.5")
+app = FastAPI(title="Sovereign Confluence Engine", version="3.6")
 
+# --- THE INSTITUTIONAL WATCHLIST & SECTOR MAP ---
 TOKEN_MAP = {
     "ETH":  {"chain": "ethereum", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "sector": "L1 / Blue-Chip"},
     "BNB":  {"chain": "bnb",      "address": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "sector": "L1 / Exchange"},
@@ -29,9 +30,57 @@ class TradingViewPayload(BaseModel):
     timeframe: str
     secret_token: str
 
+@app.get("/")
+async def root():
+    return {"status": "Engine Active", "port": int(os.getenv("PORT", 8080))}
+
+# --- CRASH-PROOF DIAGNOSTIC MATRIX ---
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "version": "3.5"}
+    health_report = {
+        "status": "healthy",
+        "version": "3.6",
+        "api_connectivity_matrix": {}
+    }
+    
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        # 1. Test Alpha Vantage Integration
+        try:
+            av_key = os.getenv("ALPHA_VANTAGE_KEY", "FNZA72FMXYIDU7VJ")
+            av_res = await client.get(f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&limit=1&apikey={av_key}")
+            health_report["api_connectivity_matrix"]["alphavantage"] = (
+                "CONNECTED" if av_res.status_code == 200 and "feed" in av_res.json() else "AUTH_FAILED"
+            )
+        except Exception as e:
+            health_report["api_connectivity_matrix"]["alphavantage"] = f"OFFLINE: {str(e)}"
+
+        # 2. Test FMP Integration
+        try:
+            fmp_key = os.getenv("FMP_API_KEY", "iYdmc43pzwqT7sETRC8pwVG7mIqDTNXI")
+            fmp_res = await client.get(f"https://financialmodelingprep.com/api/v3/economic_calendar?limit=1&apikey={fmp_key}")
+            health_report["api_connectivity_matrix"]["fmp"] = (
+                "CONNECTED" if fmp_res.status_code == 200 else "AUTH_FAILED"
+            )
+        except Exception as e:
+            health_report["api_connectivity_matrix"]["fmp"] = f"OFFLINE: {str(e)}"
+
+        # 3. Test Nansen Integration
+        try:
+            nan_key = os.getenv("NANSEN_API_KEY", "nsn_77d85428e995e486381ed79004a4c588")
+            nan_res = await client.post(
+                "https://api.nansen.ai/api/v1/smart-money/netflows",
+                json={"chains": ["ethereum"], "filters": {"token_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"}},
+                headers={"apiKey": nan_key, "Content-Type": "application/json"}
+            )
+            health_report["api_connectivity_matrix"]["nansen"] = (
+                "CONNECTED" if nan_res.status_code in [200, 422, 400] else "AUTH_FAILED"
+            )
+            if nan_res.status_code == 403:
+                health_report["api_connectivity_matrix"]["nansen"] = "AUTH_FAILED (403)"
+        except Exception as e:
+            health_report["api_connectivity_matrix"]["nansen"] = f"OFFLINE: {str(e)}"
+
+    return health_report
 
 # --- PUBLIC API GUARD LAYERS ---
 
@@ -196,17 +245,18 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
     
-    # Fully converted to Crash-Proof HTML formatting
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} <b>DECISION: {decision}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"💎 <b>Asset:</b> <code>${symbol}</code>\n🏷️ <b>Sector:</b> <code>{sector}</code>\n📊 <b>TF:</b> <code>{payload.timeframe}m</code> | <b>Price:</b> <code>${price_display}</code>\n"
+        f"💎 <b>Asset:</b> <code>${symbol}</code>\n"
+        f"🏷️ <b>Sector:</b> <code>{sector}</code>\n"
+        f"📊 <b>TF:</b> <code>{payload.timeframe}m</code> | <b>Price:</b> <code>${price_display}</code>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"{'🌍 <b>MACRO TELEMETRY</b>' if is_forex else '🛡️ <b>ON-CHAIN INTELLIGENCE</b>'}\n"
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
-        f"📈 <i>Confluence Engine V3.5</i>"
+        f"📈 <i>Confluence Engine V3.6</i>"
     )
 
     background_tasks.add_task(send_telegram_notification, rich_message)
