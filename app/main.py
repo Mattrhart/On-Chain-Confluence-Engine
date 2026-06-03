@@ -11,7 +11,6 @@ from app.nansen import fetch_full_intelligence
 load_dotenv()
 app = FastAPI(title="Sovereign Confluence Engine", version="5.0")
 
-# --- THE AUTO-ROUTING CORRELATION MATRIX ---
 CRYPTO_CLEAN_MAP = {
     "BTC": "WBTC", "BTCUSD": "WBTC", "BTCUSDT": "WBTC",
     "ETH": "ETH",  "ETHUSD": "ETH",  "ETHUSDT": "ETH",
@@ -23,7 +22,7 @@ CRYPTO_CLEAN_MAP = {
 TOKEN_MAP = {
     "ETH":  {"chain": "ethereum", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "sector": "L1 / Blue-Chip"},
     "BNB":  {"chain": "bnb",      "address": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c", "sector": "L1 / Exchange"},
-    "SOL":  {"chain": "solana",   "address": "So11111111111111111111111111111111111111112", "sector": "L1 / Speed"},
+    "SOL":  {"chain": "ethereum", "address": "0xd31a59c85ae9d8edefec411d448f90841571b89c", "sector": "L1 / Speed"},
     "HYPE": {"chain": "hyperevm", "address": "0x0d01dc56dcaaca66ad901c959b4011ec", "sector": "L1 / Perp DEX"},
     "WBTC": {"chain": "ethereum", "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", "sector": "Market Anchor"},
     "LINK": {"chain": "ethereum", "address": "0x514910771af9ca656af840dff83e8264ecf986ca", "sector": "Oracle / Infra"},
@@ -54,25 +53,9 @@ class TradingViewPayload(BaseModel):
 async def root():
     return {"status": "Engine V5.0 Active"}
 
-@app.get("/health")
-async def health_check():
-    health_report = {"status": "healthy", "version": "5.0", "api_connectivity_matrix": {}}
-    async with httpx.AsyncClient(timeout=4.0) as client:
-        try:
-            av_key = os.getenv("ALPHA_VANTAGE_KEY")
-            av_res = await client.get(f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&limit=1&apikey={av_key}")
-            health_report["api_connectivity_matrix"]["alphavantage"] = "CONNECTED" if av_res.status_code == 200 else "AUTH_FAILED"
-        except: health_report["api_connectivity_matrix"]["alphavantage"] = "OFFLINE"
-        try:
-            nan_key = os.getenv("NANSEN_API_KEY")
-            nan_res = await client.post("https://api.nansen.ai/api/v1/token-screener", json={"chains": ["ethereum"], "timeframe": "24h", "pagination": {"page": 1, "per_page": 1}}, headers={"apiKey": nan_key, "Content-Type": "application/json"})
-            health_report["api_connectivity_matrix"]["nansen"] = "CONNECTED" if nan_res.status_code == 200 else "AUTH_FAILED"
-        except: health_report["api_connectivity_matrix"]["nansen"] = "OFFLINE"
-    return health_report
-
 async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
     if chain.lower() == "solana": return 5000000.0
-    if chain.lower() == "hyperevm": return 3500000.0  # Safe deterministic default for Hyperliquid L1
+    if chain.lower() == "hyperevm": return 3500000.0
     url = f"https://api.geckoterminal.com/api/v2/networks/{chain.lower()}/tokens/{address}/pools?page=1"
     headers = {"Accept": "application/json;version=20230302"}
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -84,83 +67,42 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
         except: pass
     return 1000000.0
 
-# --- DETERMINISTIC MACRO LOGIC MATRIX ---
 async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str, direction: str) -> dict:
     api_key = os.getenv("ALPHA_VANTAGE_KEY")
     av_ticker = f"FOREX:{base_ccy}{quote_ccy}"
     url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={av_ticker}&sort=LATEST&limit=15&apikey={api_key}"
-    
-    base_keys = CURRENCY_KEYWORDS.get(base_ccy, [])
-    quote_keys = CURRENCY_KEYWORDS.get(quote_ccy, [])
-    target_keys = base_keys + quote_keys
+    target_keys = CURRENCY_KEYWORDS.get(base_ccy, []) + CURRENCY_KEYWORDS.get(quote_ccy, [])
 
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
             res = await client.get(url)
             if res.status_code == 200:
-                data = res.json()
-                feed = data.get("feed", [])
-                
-                if not feed:
-                    fallback_url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=economy_macro&sort=LATEST&limit=40&apikey={api_key}"
-                    res = await client.get(fallback_url)
-                    feed = res.json().get("feed", [])
-                
+                feed = res.json().get("feed", [])
                 relevant_articles = []
                 pattern = re.compile(r'\b(' + '|'.join(re.escape(tk) for tk in target_keys) + r')\b')
-                
                 for a in feed:
-                    text_to_search = f"{a.get('title', '')} {a.get('summary', '')}".lower()
-                    if pattern.search(text_to_search):
-                        title = a.get("title", "")
-                        a["clean_title"] = title.split("...")[0].strip() if "..." in title else title
+                    if pattern.search(f"{a.get('title', '')} {a.get('summary', '')}".lower()):
                         relevant_articles.append(a)
 
                 if not relevant_articles:
-                    return {
-                        "risk_score": 0.0, "sentiment": "NEUTRAL", 
-                        "headline": f"No active structural headlines detected for {base_ccy}/{quote_ccy}.",
-                        "brief": "Macro landscape quiet. Pure order-flow execution authorized."
-                    }
+                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "headline": "No active structural headlines on record.", "brief": "• Order-Flow: Volatility nominal.\n• Risk: Exposure baseline clear for technical execution."}
                 
                 top_article = relevant_articles[0]
-                headline = top_article.get("clean_title", top_article.get("title"))
+                headline = top_article.get("title", "").split("...")[0].strip()
                 sentiment_label = top_article.get("overall_sentiment_label", "NEUTRAL")
-                sentiment_score = float(top_article.get("overall_sentiment_score", 0.0))
 
-                # Compute baseline risks
-                total_drag = 0.0
-                critical_shocks = ["fomc", "fed rate", "cpi", "nfp", "nonfarm", "interest rate"]
-                now = datetime.datetime.now()
-
-                for art in relevant_articles[:10]:
-                    p_str = art.get("time_published", "")
-                    if not p_str: continue
-                    try: days_old = (now - datetime.datetime.strptime(p_str, "%Y%m%dT%H%M%S")).days
-                    except: days_old = 0
-                    if any(ck in art.get("title", "").lower() for ck in critical_shocks):
-                        total_drag += 6.0 * (0.75 ** days_old)
-
-                # DYNAMIC RULE ENGINE: Evaluates USD cross-pair trends without AI latency
                 usd_is_quote = (quote_ccy == "USD")
-                brief_text = f"Monetary data prints as {sentiment_label}."
-                
                 if "BULLISH" in sentiment_label:
-                    if usd_is_quote:
-                        brief_text = f"Stronger US Dollar sentiment puts structural downward pressure on {base_ccy}/USD."
-                    else:
-                        brief_text = f"Bullish USD velocity driving expansion on USD/{quote_ccy} pair structures."
+                    impact = f"Stronger US Dollar sentiment puts structural downward pressure on {base_ccy}/USD." if usd_is_quote else f"Bullish USD velocity driving expansion on USD/{quote_ccy} pair structures."
                 elif "BEARISH" in sentiment_label:
-                    if usd_is_quote:
-                        brief_text = f"Weakening US Dollar parameters support structural local breakout extensions for {base_ccy}/USD."
-                    else:
-                        brief_text = f"Bearish Dollar liquidity metrics capping global upside extensions against {quote_ccy} environments."
+                    impact = f"Weakening US Dollar parameters support structural local breakout extensions for {base_ccy}/USD." if usd_is_quote else f"Bearish Dollar liquidity metrics capping global upside extensions against {quote_ccy} environments."
+                else:
+                    impact = "USD liquidity structures printing completely stable inside tracking bounds."
 
-                return {"risk_score": total_drag, "sentiment": sentiment_label, "headline": headline, "brief": brief_text}
+                return {"risk_score": 0.0, "sentiment": sentiment_label, "headline": headline, "brief": f"• Macro Context: Financial streams print as {sentiment_label}.\n• Dynamic Impact: {impact}"}
         except: pass
-    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "headline": "Macro Pipeline Timeout", "brief": "Executing blindly on fallback protocol."}
+    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "headline": "Macro Pipeline Timeout", "brief": "• System Status: Running purely on technical chart parameters."}
 
-# --- UNIFIED INTELLIGENT WEBHOOK ---
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
 async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
@@ -168,10 +110,9 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
 
     raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
     is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
-    decision, stars, reasoning = "EXECUTE", "⭐⭐⭐", ""
     
-    # Map direction labels for the dynamic alert headers
     dir_label = "LONG" if payload.direction.upper() == "BUY" else "SHORT"
+    decision, stars, reasoning, metric_display = "EXECUTE", "⭐⭐⭐", "", "Processing Data Matrix..."
 
     if is_forex:
         base_ccy, quote_ccy = raw_ticker[:3], raw_ticker[3:]
@@ -180,14 +121,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         
         av_intel = await check_forex_news_risk(symbol, base_ccy, quote_ccy, payload.direction.upper())
         metric_display = f"AV: {av_intel['sentiment']}"
-        base_note = f"📰 Latest: {av_intel['headline']}"
-
-        if av_intel["risk_score"] >= 8.0:
-            decision, stars, reasoning = "ABORT", "⚠️", f"🛑 MACRO RISK SHOCK: Systemic headline volatility detected.\n{base_note}"
-        else:
-            reasoning = f"✅ {av_intel['brief']}\n{base_note}"
-            if "BULLISH" in av_intel["sentiment"] and payload.direction.upper() == "BUY": stars = "⭐⭐⭐⭐⭐"
-            if "BEARISH" in av_intel["sentiment"] and payload.direction.upper() == "SHORT": stars = "⭐⭐⭐⭐⭐"
+        reasoning = f"{av_intel['brief']}\n📰 <b>Latest:</b> {av_intel['headline']}"
 
     else:
         lookup_key = raw_ticker.split(":")[-1]
@@ -199,50 +133,77 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         symbol = CRYPTO_CLEAN_MAP.get(lookup_key, lookup_key)
         token_info = TOKEN_MAP.get(symbol)
 
-        if token_info:
-            sector = token_info.get("sector")
-            metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
-            pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
+        # 🛑 GHOST LAYER: Drops untracked webhooks instantly
+        if not token_info:
+            print(f"🛑 GHOST LAYER: {symbol} bypassed. Tracking matrix clean.")
+            return {"status": "ignored", "reason": "Asset not configured."}
+
+        sector = token_info.get("sector")
+        pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
+        
+        metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
+        if not metrics:
+            metrics = {"net_flow_24h": 0, "cex_netflow": 0, "perp_bias": "NEUTRAL"}
+
+        # Extract values for the Confluence Matrix
+        smart_money_flow = metrics.get("net_flow_24h", 0)
+        cex_24h_netflow = metrics.get("cex_netflow", 0)
+        perp_leaderboard_bias = metrics.get("perp_bias", "NEUTRAL")
+        direction = payload.direction.upper()
+
+        if abs(smart_money_flow) >= 1_000_000: metric_display = f"${smart_money_flow/1e6:+.2f}M Flow"
+        else: metric_display = f"${smart_money_flow/1e3:+.1f}K Flow"
+
+        # 🛡️ THE DETERMINISTIC SCORING MATRIX
+        confluence_score = 0
+        reasons = []
+
+        # Stream 1: Smart Money (Primary)
+        if direction == "BUY" and smart_money_flow > 500_000:
+            confluence_score += 3
+            reasons.append("• <b>Primary Stream:</b> Smart Money Accumulation Mapped (+3)")
+        elif direction == "SHORT" and smart_money_flow < -500_000:
+            confluence_score += 3
+            reasons.append("• <b>Primary Stream:</b> Smart Money Heavy Distribution Mapped (+3)")
         else:
-            sector, metrics, pool_liquidity = "Unmapped Asset", None, 1000000.0
+            reasons.append("• <b>Primary Stream:</b> Smart Money Flow Flat/Neutral (+0)")
 
-        if metrics:
-            flow, direction = metrics["net_flow_24h"], payload.direction.upper()
-            base_note = f"💧 Pool Depth: ${pool_liquidity/1e3:,.0f}k"
-
-            if pool_liquidity < 250000.0:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 ILLIQUID POOL TRAP: DEX liquidity too thin for safe execution.\n{base_note}"
-            elif direction == "BUY" and flow < -2000000:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 LIQUIDITY OVERHANG: Smart money distribution detected via active selling.\n{base_note}"
-            elif direction == "SHORT" and flow > 2000000:
-                decision, stars, reasoning = "ABORT", "⚠️", f"🛑 CONTRA-TREND TRAP: Heavy institutional whale accumulation underway.\n{base_note}"
-            else:
-                # Rule Engine for Crypto Analyst Brief
-                if flow > 500000:
-                    brief_text = "Heavy smart money accumulation mapped on chain."
-                elif flow < -500000:
-                    brief_text = "Systemic institutional distribution observed."
-                else:
-                    brief_text = "Capital flows stable. Technical setups aligned within baseline risk parameters."
-                reasoning = f"✅ {brief_text}\n{base_note}"
-
-            # FIX: Adaptive Formatting Engine to stop $0.0M rounding errors
-            if abs(flow) >= 1_000_000:
-                metric_display = f"${flow/1e6:+.2f}M Flow"
-            else:
-                metric_display = f"${flow/1e3:+.1f}K Flow"
+        # Stream 2: Exchange Supply Tracking (Secondary)
+        if direction == "BUY" and cex_24h_netflow < -100_000:
+            confluence_score += 2
+            reasons.append("• <b>Secondary Stream:</b> Exchange Supply Shock / Outflows Verified (+2)")
+        elif direction == "SHORT" and cex_24h_netflow > 100_000:
+            confluence_score += 2
+            reasons.append("• <b>Secondary Stream:</b> Exchange Inflows / Increase in Sell Pressures (+2)")
         else:
-            # Clean Fallback layer for app-chains like Hyperliquid
-            if token_info and token_info.get("chain") == "hyperevm":
-                metric_display = "App-Chain Optimized"
-                reasoning = f"✅ Running structural execution protocol for custom Layer-1 app-chain topology.\n💧 Pool Depth: $3,500k"
+            reasons.append("• <b>Secondary Stream:</b> Exchange Supply Balance Stable (+0)")
+
+        # Stream 3: Derivatives Leaderboard Tracking (Tertiary)
+        if direction == "BUY" and perp_leaderboard_bias == "LONG":
+            confluence_score += 2
+            reasons.append("• <b>Tertiary Stream:</b> High-PnL Perp Traders Positioned LONG (+2)")
+        elif direction == "SHORT" and perp_leaderboard_bias == "SHORT":
+            confluence_score += 2
+            reasons.append("• <b>Tertiary Stream:</b> High-PnL Perp Traders Positioned SHORT (+2)")
+        else:
+            reasons.append("• <b>Tertiary Stream:</b> Derivatives Bias Neutral (+0)")
+
+        # Final Execution Hard Verification Boundaries
+        if pool_liquidity < 250000.0:
+            decision, stars = "ABORT", "⚠️"
+            reasons.append(f"🛑 <b>CRITICAL RISK:</b> Liquidity depth sub-optimal (${pool_liquidity/1e3:,.0f}k). Execution blocked.")
+        else:
+            # Requires minimum 3 points across the cumulative streams to validate execution
+            if confluence_score >= 3:
+                decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
             else:
-                metric_display = "On-Chain Out of Bounds"
-                reasoning = "Technical layout execution bypass due to unmapped smart contract topology."
+                decision, stars = "ABORT", "⚠️"
+            reasons.append(f"📊 <b>Confluence Framework Score: {confluence_score}/7</b>")
+
+        reasoning = "\n".join(reasons)
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
     
-    # Added dynamic direction payload label directly next to the EXECUTE/ABORT marker
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} <b>DECISION: {decision} ({dir_label})</b>\n"
         f"━━━━━━━━━━━━━━━\n"
