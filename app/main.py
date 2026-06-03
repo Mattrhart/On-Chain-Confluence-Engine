@@ -1,4 +1,5 @@
 import os
+import re
 import httpx
 import datetime
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -86,7 +87,9 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
 # --- SMART RELEVANCE FOREX FILTER ---
 async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str) -> dict:
     api_key = os.getenv("ALPHA_VANTAGE_KEY")
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=economy_macro&sort=LATEST&limit=50&apikey={api_key}"
+    
+    av_ticker = f"FOREX:{base_ccy}{quote_ccy}"
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={av_ticker}&sort=LATEST&limit=15&apikey={api_key}"
     
     base_keys = CURRENCY_KEYWORDS.get(base_ccy, [])
     quote_keys = CURRENCY_KEYWORDS.get(quote_ccy, [])
@@ -96,14 +99,25 @@ async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str) -> d
         try:
             res = await client.get(url)
             if res.status_code == 200:
-                feed = res.json().get("feed", [])
+                data = res.json()
+                feed = data.get("feed", [])
                 
-                # Sift out corporate noise - keep only headlines containing asset-relevant macro tokens
+                if not feed:
+                    fallback_url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&topics=economy_macro&sort=LATEST&limit=40&apikey={api_key}"
+                    res = await client.get(fallback_url)
+                    feed = res.json().get("feed", [])
+                
                 relevant_articles = []
+                pattern = re.compile(r'\b(' + '|'.join(re.escape(tk) for tk in target_keys) + r')\b')
+                
                 for a in feed:
-                    title_lower = a.get("title", "").lower()
-                    summary_lower = a.get("summary", "").lower()
-                    if any(tk in title_lower or tk in summary_lower for tk in target_keys):
+                    title = a.get("title", "")
+                    summary = a.get("summary", "")
+                    text_to_search = f"{title} {summary}".lower()
+                    
+                    if pattern.search(text_to_search):
+                        clean_title = title.split("...")[0].strip() if "..." in title else title
+                        a["clean_title"] = clean_title
                         relevant_articles.append(a)
 
                 if not relevant_articles:
@@ -114,11 +128,10 @@ async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str) -> d
                     }
                 
                 top_article = relevant_articles[0]
-                headline = top_article.get("title")
+                headline = top_article.get("clean_title", top_article.get("title"))
                 sentiment_label = top_article.get("overall_sentiment_label", "NEUTRAL")
                 sentiment_score = float(top_article.get("overall_sentiment_score", 0.0))
 
-                # Assess systemic shock via velocity calculations
                 total_drag = 0.0
                 critical_shocks = ["fomc", "fed rate", "cpi", "nfp", "nonfarm", "interest rate"]
                 now = datetime.datetime.now()
@@ -126,13 +139,14 @@ async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str) -> d
                 for art in relevant_articles[:10]:
                     p_str = art.get("time_published", "")
                     if not p_str: continue
-                    try: days_old = (now - datetime.datetime.strptime(p_str, "%Y%m%dT%H%M%S")).days
-                    except: days_old = 0
+                    try: 
+                        days_old = (now - datetime.datetime.strptime(p_str, "%Y%m%dT%H%M%S")).days
+                    except: 
+                        days_old = 0
                     
                     if any(ck in art.get("title", "").lower() for ck in critical_shocks):
                         total_drag += 6.0 * (0.75 ** days_old)
 
-                # Formulate dynamic quantitative brief text
                 brief_text = f"Monetary drivers for {base_ccy} print as {sentiment_label}. "
                 if abs(sentiment_score) > 0.15:
                     brief_text += f"Active fundamental imbalances detected; positional risk profile elevated."

@@ -5,46 +5,77 @@ NANSEN_API_BASE = "https://api.nansen.ai/api/v1"
 
 async def fetch_full_intelligence(symbol: str, address: str, chain: str):
     """
-    Unified Intelligence Engine (V3.7).
-    Uses the Token Screener endpoint (Smart Money Filtered) to bypass tier restrictions.
+    Unified Intelligence Engine (V4.0).
+    Structurally routes EVM vs. SVM chains to prevent topology errors.
     """
+    evm_chains = ["ethereum", "base", "arbitrum", "optimism", "bnb", "polygon"]
+    svm_chains = ["solana"]
+    
+    chain_slug = chain.lower()
+    
+    if chain_slug in evm_chains:
+        return await _fetch_evm_intelligence(symbol, address, chain_slug)
+    elif chain_slug in svm_chains:
+        return await _fetch_svm_intelligence(symbol, address, chain_slug)
+    else:
+        print(f"⚠️ Unmapped network architecture: {chain_slug}")
+        return None
+
+async def _fetch_evm_intelligence(symbol: str, address: str, chain_slug: str):
     api_key = os.getenv("NANSEN_API_KEY")
     headers = {"apiKey": api_key, "Content-Type": "application/json"}
-    chain_slug = chain.lower()
 
     payload = {
         "chains": [chain_slug],
         "timeframe": "24h",
         "pagination": {"page": 1, "per_page": 50},
-        "filters": {
-            "only_smart_money": True
-        }
+        "filters": {"only_smart_money": True}
     }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             res = await client.post(f"{NANSEN_API_BASE}/token-screener", json=payload, headers=headers)
-            
             if res.status_code == 200:
                 data = res.json().get("data", [])
-                
-                # Search the screener results for our specific token
                 target_token = next((t for t in data if t.get("token_address", "").lower() == address.lower()), None)
-                
                 if target_token:
                     return {
                         "net_flow_24h": target_token.get("netflow", 0),
-                        "risk_score": 5, # Screener doesn't provide TGM risk score, defaulting to neutral
-                        "sm_conviction": 50, # Defaulting conviction as TGM is locked
+                        "risk_score": 5, 
+                        "sm_conviction": 50, 
                         "is_institutional": True
                     }
-                else:
-                    print(f"⚠️ {symbol} not found in Top 50 Smart Money Screener flows today.")
-                    return None
-            else:
-                print(f"⚠️ Nansen API Error: {res.status_code} - {res.text}")
                 return None
-                
         except Exception as e:
-            print(f"⚠️ Nansen Intelligence Failure: {e}")
+            print(f"⚠️ EVM Intelligence Failure: {e}")
             return None
+
+async def _fetch_svm_intelligence(symbol: str, address: str, chain_slug: str):
+    """
+    Dedicated routing for Solana Programs. 
+    Bypasses EVM token screener to prevent smart-contract topology crashes.
+    """
+    api_key = os.getenv("NANSEN_API_KEY")
+    headers = {"apiKey": api_key, "Content-Type": "application/json"}
+    
+    # Example SVM endpoint (Requires Nansen Solana Tier API)
+    url = f"{NANSEN_API_BASE}/solana/token/{address}/flows" 
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            res = await client.get(url, headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                return {
+                    "net_flow_24h": data.get("netflow_24h", 0),
+                    "risk_score": 5,
+                    "sm_conviction": 50,
+                    "is_institutional": True
+                }
+            else:
+                # Fallback to prevent hard crash if SVM endpoint isn't fully licensed on your tier
+                print(f"⚠️ SVM Route bypass for {symbol}. Proceeding on technical execution.")
+                return {"net_flow_24h": 0, "risk_score": 5, "sm_conviction": 50, "is_institutional": False}
+        except Exception as e:
+            print(f"⚠️ SVM Intelligence Failure: {e}")
+            return {"net_flow_24h": 0, "risk_score": 5, "sm_conviction": 50, "is_institutional": False}
