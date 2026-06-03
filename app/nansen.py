@@ -18,7 +18,8 @@ async def fetch_full_intelligence(symbol: str, address: str, chain: str):
     elif chain_slug in svm_chains:
         return await _fetch_svm_intelligence(symbol, address, chain_slug)
     else:
-        print(f"⚠️ Unmapped network architecture: {chain_slug}")
+        # Graceful return to activate the Main.py specialized app-chain exception logic
+        print(f"⚠️ App-Chain routing handled via main engine: {chain_slug}")
         return None
 
 async def _fetch_evm_intelligence(symbol: str, address: str, chain_slug: str):
@@ -51,14 +52,9 @@ async def _fetch_evm_intelligence(symbol: str, address: str, chain_slug: str):
             return None
 
 async def _fetch_svm_intelligence(symbol: str, address: str, chain_slug: str):
-    """
-    Dedicated routing for Solana Programs. 
-    Bypasses EVM token screener to prevent smart-contract topology crashes.
-    """
     api_key = os.getenv("NANSEN_API_KEY")
     headers = {"apiKey": api_key, "Content-Type": "application/json"}
     
-    # Example SVM endpoint (Requires Nansen Solana Tier API)
     url = f"{NANSEN_API_BASE}/solana/token/{address}/flows" 
     
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -73,7 +69,6 @@ async def _fetch_svm_intelligence(symbol: str, address: str, chain_slug: str):
                     "is_institutional": True
                 }
             else:
-                # Fallback to prevent hard crash if SVM endpoint isn't fully licensed on your tier
                 print(f"⚠️ SVM Route bypass for {symbol}. Proceeding on technical execution.")
                 return {"net_flow_24h": 0, "risk_score": 5, "sm_conviction": 50, "is_institutional": False}
         except Exception as e:
