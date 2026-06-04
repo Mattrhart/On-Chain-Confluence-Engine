@@ -11,6 +11,15 @@ from app.nansen import fetch_full_intelligence
 load_dotenv()
 app = FastAPI(title="Sovereign Confluence Engine", version="5.0")
 
+# --- THE MACRO PEAD CACHE ---
+# In production, a daily background task updates these values via AlphaVantage
+MACRO_CACHE = {
+    "cpi": "HOT",      # Options: HOT, COLD, STABLE
+    "yields": "RISING", # Options: RISING, FALLING, STABLE
+    "nfp": "STRONG"     # Options: STRONG, WEAK, STABLE
+}
+
+# --- THE AUTO-ROUTING CORRELATION MATRIX ---
 CRYPTO_CLEAN_MAP = {
     "BTC": "WBTC", "BTCUSD": "WBTC", "BTCUSDT": "WBTC",
     "ETH": "ETH",  "ETHUSD": "ETH",  "ETHUSDT": "ETH",
@@ -32,14 +41,8 @@ TOKEN_MAP = {
 }
 
 CURRENCY_KEYWORDS = {
-    "USD": ["fed", "fomc", "powell", "dollar", "cpi", "nfp", "nonfarm", "treasury", "warsh"],
-    "EUR": ["ecb", "lagarde", "eurozone", "euro", "inflation euro"],
-    "GBP": ["boe", "bailey", "sterling", "pound", "uk economy"],
-    "CHF": ["snb", "franc", "swiss", "kordan"],
-    "JPY": ["boj", "yen", "ueda", "tokyo", "intervene"],
-    "AUD": ["rba", "aussie", "australian"],
-    "CAD": ["boc", "loonie", "canadian"],
-    "NZD": ["rbnz", "kiwi", "zealand"]
+    "USD": [], "EUR": [], "GBP": [], "CHF": [], 
+    "JPY": [], "AUD": [], "CAD": [], "NZD": []
 }
 
 class TradingViewPayload(BaseModel):
@@ -67,42 +70,6 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
         except: pass
     return 1000000.0
 
-async def check_forex_news_risk(symbol: str, base_ccy: str, quote_ccy: str, direction: str) -> dict:
-    api_key = os.getenv("ALPHA_VANTAGE_KEY")
-    av_ticker = f"FOREX:{base_ccy}{quote_ccy}"
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={av_ticker}&sort=LATEST&limit=15&apikey={api_key}"
-    target_keys = CURRENCY_KEYWORDS.get(base_ccy, []) + CURRENCY_KEYWORDS.get(quote_ccy, [])
-
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        try:
-            res = await client.get(url)
-            if res.status_code == 200:
-                feed = res.json().get("feed", [])
-                relevant_articles = []
-                pattern = re.compile(r'\b(' + '|'.join(re.escape(tk) for tk in target_keys) + r')\b')
-                for a in feed:
-                    if pattern.search(f"{a.get('title', '')} {a.get('summary', '')}".lower()):
-                        relevant_articles.append(a)
-
-                if not relevant_articles:
-                    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "headline": "No active structural headlines on record.", "brief": "• Order-Flow: Volatility nominal.\n• Risk: Exposure baseline clear for technical execution."}
-                
-                top_article = relevant_articles[0]
-                headline = top_article.get("title", "").split("...")[0].strip()
-                sentiment_label = top_article.get("overall_sentiment_label", "NEUTRAL")
-
-                usd_is_quote = (quote_ccy == "USD")
-                if "BULLISH" in sentiment_label:
-                    impact = f"Stronger US Dollar sentiment puts structural downward pressure on {base_ccy}/USD." if usd_is_quote else f"Bullish USD velocity driving expansion on USD/{quote_ccy} pair structures."
-                elif "BEARISH" in sentiment_label:
-                    impact = f"Weakening US Dollar parameters support structural local breakout extensions for {base_ccy}/USD." if usd_is_quote else f"Bearish Dollar liquidity metrics capping global upside extensions against {quote_ccy} environments."
-                else:
-                    impact = "USD liquidity structures printing completely stable inside tracking bounds."
-
-                return {"risk_score": 0.0, "sentiment": sentiment_label, "headline": headline, "brief": f"• Macro Context: Financial streams print as {sentiment_label}.\n• Dynamic Impact: {impact}"}
-        except: pass
-    return {"risk_score": 0.0, "sentiment": "NEUTRAL", "headline": "Macro Pipeline Timeout", "brief": "• System Status: Running purely on technical chart parameters."}
-
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
 async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
@@ -112,6 +79,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
     is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
     
     dir_label = "LONG" if payload.direction.upper() == "BUY" else "SHORT"
+    direction = payload.direction.upper()
     decision, stars, reasoning, metric_display = "EXECUTE", "⭐⭐⭐", "", "Processing Data Matrix..."
 
     if is_forex:
@@ -119,11 +87,61 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         symbol = f"{base_ccy}_{quote_ccy}"
         sector = f"Global FX | {base_ccy}-{quote_ccy} Cross"
         
-        av_intel = await check_forex_news_risk(symbol, base_ccy, quote_ccy, payload.direction.upper())
-        metric_display = f"AV: {av_intel['sentiment']}"
-        reasoning = f"{av_intel['brief']}\n📰 <b>Latest:</b> {av_intel['headline']}"
+        # 🛡️ THE FOREX MACRO PEAD MATRIX
+        usd_strength = 0
+        reasons = []
+
+        # 1. Calculate USD Strength from Cache (Zero API Latency)
+        if MACRO_CACHE["cpi"] == "HOT": 
+            usd_strength += 2
+            reasons.append("• <b>Inflation:</b> CPI Hot (+2 USD)")
+        elif MACRO_CACHE["cpi"] == "COLD":
+            usd_strength -= 2
+            
+        if MACRO_CACHE["yields"] == "RISING":
+            usd_strength += 2
+            reasons.append("• <b>Yields:</b> 10Y Treasury Rising (+2 USD)")
+        elif MACRO_CACHE["yields"] == "FALLING":
+            usd_strength -= 2
+            
+        if MACRO_CACHE["nfp"] == "STRONG":
+            usd_strength += 2
+            reasons.append("• <b>Labor:</b> NFP Strong (+2 USD)")
+        elif MACRO_CACHE["nfp"] == "WEAK":
+            usd_strength -= 2
+
+        # 2. The Dynamic Flipper (Base vs Quote inversion)
+        macro_bias_for_pair = 0
+        if quote_ccy == "USD":
+            # e.g., EUR/USD. Strong USD pushes pair down.
+            macro_bias_for_pair = -usd_strength
+            reasons.append(f"\n• <b>Topology:</b> USD is Quote. Pair trend inverted (Bias: {macro_bias_for_pair}).")
+        elif base_ccy == "USD":
+            # e.g., USD/JPY. Strong USD pushes pair up.
+            macro_bias_for_pair = usd_strength
+            reasons.append(f"\n• <b>Topology:</b> USD is Base. Pair trend direct (Bias: {macro_bias_for_pair}).")
+        else:
+            reasons.append("\n• <b>Topology:</b> Non-USD Cross. Evaluating on pure technicals.")
+
+        # 3. Execution Alignment
+        if direction == "BUY" and macro_bias_for_pair > 0:
+            decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
+            reasons.append("\n✅ <b>Decision:</b> Macro framework aligned with LONG setup.")
+        elif direction == "SHORT" and macro_bias_for_pair < 0:
+            decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
+            reasons.append("\n✅ <b>Decision:</b> Macro framework aligned with SHORT setup.")
+        elif macro_bias_for_pair == 0:
+             decision, stars = "EXECUTE", "⭐⭐⭐"
+             reasons.append("\n✅ <b>Decision:</b> Macro environment flat. Authorized on technicals.")
+        else:
+            decision, stars = "ABORT", "⚠️"
+            reasons.append("\n🛑 <b>Decision:</b> ABORT. Technical direction fights established macro trend.")
+
+        metric_display = f"USD PEAD: {usd_strength}"
+        reasoning = "\n".join(reasons)
 
     else:
+        # --- CRYPTO GHOST LAYER & MATRIX (Remains exactly as we built it) ---
         lookup_key = raw_ticker.split(":")[-1]
         for stable in ["USDT", "USDC", "USD"]:
             if lookup_key.endswith(stable) and lookup_key != stable:
@@ -133,7 +151,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         symbol = CRYPTO_CLEAN_MAP.get(lookup_key, lookup_key)
         token_info = TOKEN_MAP.get(symbol)
 
-        # 🛑 GHOST LAYER: Drops untracked webhooks instantly
         if not token_info:
             print(f"🛑 GHOST LAYER: {symbol} bypassed. Tracking matrix clean.")
             return {"status": "ignored", "reason": "Asset not configured."}
@@ -145,20 +162,16 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         if not metrics:
             metrics = {"net_flow_24h": 0, "cex_netflow": 0, "perp_bias": "NEUTRAL"}
 
-        # Extract values for the Confluence Matrix
         smart_money_flow = metrics.get("net_flow_24h", 0)
         cex_24h_netflow = metrics.get("cex_netflow", 0)
         perp_leaderboard_bias = metrics.get("perp_bias", "NEUTRAL")
-        direction = payload.direction.upper()
 
         if abs(smart_money_flow) >= 1_000_000: metric_display = f"${smart_money_flow/1e6:+.2f}M Flow"
         else: metric_display = f"${smart_money_flow/1e3:+.1f}K Flow"
 
-        # 🛡️ THE DETERMINISTIC SCORING MATRIX
         confluence_score = 0
         reasons = []
 
-        # Stream 1: Smart Money (Primary)
         if direction == "BUY" and smart_money_flow > 500_000:
             confluence_score += 3
             reasons.append("• <b>Primary Stream:</b> Smart Money Accumulation Mapped (+3)")
@@ -168,7 +181,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             reasons.append("• <b>Primary Stream:</b> Smart Money Flow Flat/Neutral (+0)")
 
-        # Stream 2: Exchange Supply Tracking (Secondary)
         if direction == "BUY" and cex_24h_netflow < -100_000:
             confluence_score += 2
             reasons.append("• <b>Secondary Stream:</b> Exchange Supply Shock / Outflows Verified (+2)")
@@ -178,7 +190,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             reasons.append("• <b>Secondary Stream:</b> Exchange Supply Balance Stable (+0)")
 
-        # Stream 3: Derivatives Leaderboard Tracking (Tertiary)
         if direction == "BUY" and perp_leaderboard_bias == "LONG":
             confluence_score += 2
             reasons.append("• <b>Tertiary Stream:</b> High-PnL Perp Traders Positioned LONG (+2)")
@@ -188,17 +199,15 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             reasons.append("• <b>Tertiary Stream:</b> Derivatives Bias Neutral (+0)")
 
-        # Final Execution Hard Verification Boundaries
         if pool_liquidity < 250000.0:
             decision, stars = "ABORT", "⚠️"
-            reasons.append(f"🛑 <b>CRITICAL RISK:</b> Liquidity depth sub-optimal (${pool_liquidity/1e3:,.0f}k). Execution blocked.")
+            reasons.append(f"\n🛑 <b>CRITICAL RISK:</b> Liquidity depth sub-optimal (${pool_liquidity/1e3:,.0f}k).")
         else:
-            # Requires minimum 3 points across the cumulative streams to validate execution
             if confluence_score >= 3:
                 decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
             else:
                 decision, stars = "ABORT", "⚠️"
-            reasons.append(f"📊 <b>Confluence Framework Score: {confluence_score}/7</b>")
+            reasons.append(f"\n📊 <b>Confluence Framework Score: {confluence_score}/7</b>")
 
         reasoning = "\n".join(reasons)
 
