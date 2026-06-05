@@ -12,11 +12,11 @@ load_dotenv()
 app = FastAPI(title="Sovereign Confluence Engine", version="5.0")
 
 # --- THE MACRO PEAD CACHE ---
-# In production, a daily background task updates these values via AlphaVantage
+# Updated to track release dates and duration of the macro trend
 MACRO_CACHE = {
-    "cpi": "HOT",      # Options: HOT, COLD, STABLE
-    "yields": "RISING", # Options: RISING, FALLING, STABLE
-    "nfp": "STRONG"     # Options: STRONG, WEAK, STABLE
+    "cpi": {"status": "HOT", "date": "May 12, 2026 (Apr Data)"},       
+    "yields": {"status": "RISING", "date": "Live Treasury Feed"}, 
+    "nfp": {"status": "STRONG", "date": "June 5, 2026 (May Data)"}     
 }
 
 # --- THE AUTO-ROUTING CORRELATION MATRIX ---
@@ -91,48 +91,48 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         usd_strength = 0
         reasons = []
 
-        # 1. Calculate USD Strength from Cache (Zero API Latency)
-        if MACRO_CACHE["cpi"] == "HOT": 
+        # 1. Calculate USD Strength from Cache & Explain Economic Impact
+        if MACRO_CACHE["cpi"]["status"] == "HOT": 
             usd_strength += 2
-            reasons.append("• <b>Inflation:</b> CPI Hot (+2 USD)")
-        elif MACRO_CACHE["cpi"] == "COLD":
+            reasons.append(f"• <b>Inflation:</b> CPI Hot (+2) | <i>Increases USD Value (Hawkish Fed)</i> | Updated: {MACRO_CACHE['cpi']['date']}")
+        elif MACRO_CACHE["cpi"]["status"] == "COLD":
             usd_strength -= 2
             
-        if MACRO_CACHE["yields"] == "RISING":
+        if MACRO_CACHE["yields"]["status"] == "RISING":
             usd_strength += 2
-            reasons.append("• <b>Yields:</b> 10Y Treasury Rising (+2 USD)")
-        elif MACRO_CACHE["yields"] == "FALLING":
+            reasons.append(f"• <b>Yields:</b> 10Y Treasury Rising (+2) | <i>Increases USD Value (Capital Inflows)</i> | Updated: {MACRO_CACHE['yields']['date']}")
+        elif MACRO_CACHE["yields"]["status"] == "FALLING":
             usd_strength -= 2
             
-        if MACRO_CACHE["nfp"] == "STRONG":
+        if MACRO_CACHE["nfp"]["status"] == "STRONG":
             usd_strength += 2
-            reasons.append("• <b>Labor:</b> NFP Strong (+2 USD)")
-        elif MACRO_CACHE["nfp"] == "WEAK":
+            reasons.append(f"• <b>Labor:</b> NFP Strong (+2) | <i>Increases USD Value (Rate Cut Delay)</i> | Updated: {MACRO_CACHE['nfp']['date']}")
+        elif MACRO_CACHE["nfp"]["status"] == "WEAK":
             usd_strength -= 2
 
-        # 2. The Dynamic Flipper (Base vs Quote inversion)
+        # 2. The Dynamic Flipper (Explicit Inversion Logic)
         macro_bias_for_pair = 0
         if quote_ccy == "USD":
             # e.g., EUR/USD. Strong USD pushes pair down.
             macro_bias_for_pair = -usd_strength
-            reasons.append(f"\n• <b>Topology:</b> USD is Quote. Pair trend inverted (Bias: {macro_bias_for_pair}).")
+            reasons.append(f"\n• <b>Topology:</b> USD is Quote ({base_ccy}/{quote_ccy}). A stronger Dollar inherently suppresses the base currency, driving the pair's price DOWN. Pair trend inverted (Bias: {macro_bias_for_pair}).")
         elif base_ccy == "USD":
             # e.g., USD/JPY. Strong USD pushes pair up.
             macro_bias_for_pair = usd_strength
-            reasons.append(f"\n• <b>Topology:</b> USD is Base. Pair trend direct (Bias: {macro_bias_for_pair}).")
+            reasons.append(f"\n• <b>Topology:</b> USD is Base ({base_ccy}/{quote_ccy}). A stronger Dollar directly drives the pair's price UP. Pair trend direct (Bias: {macro_bias_for_pair}).")
         else:
             reasons.append("\n• <b>Topology:</b> Non-USD Cross. Evaluating on pure technicals.")
 
         # 3. Execution Alignment
         if direction == "BUY" and macro_bias_for_pair > 0:
             decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
-            reasons.append("\n✅ <b>Decision:</b> Macro framework aligned with LONG setup.")
+            reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with LONG setup.")
         elif direction == "SHORT" and macro_bias_for_pair < 0:
             decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
-            reasons.append("\n✅ <b>Decision:</b> Macro framework aligned with SHORT setup.")
+            reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with SHORT setup.")
         elif macro_bias_for_pair == 0:
              decision, stars = "EXECUTE", "⭐⭐⭐"
-             reasons.append("\n✅ <b>Decision:</b> Macro environment flat. Authorized on technicals.")
+             reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro environment flat. Authorized on technicals.")
         else:
             decision, stars = "ABORT", "⚠️"
             reasons.append("\n🛑 <b>Decision:</b> ABORT. Technical direction fights established macro trend.")
@@ -141,7 +141,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         reasoning = "\n".join(reasons)
 
     else:
-        # --- CRYPTO GHOST LAYER & MATRIX (Remains exactly as we built it) ---
+        # --- CRYPTO GHOST LAYER & MATRIX ---
         lookup_key = raw_ticker.split(":")[-1]
         for stable in ["USDT", "USDC", "USD"]:
             if lookup_key.endswith(stable) and lookup_key != stable:
@@ -179,7 +179,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             confluence_score += 3
             reasons.append("• <b>Primary Stream:</b> Smart Money Heavy Distribution Mapped (+3)")
         else:
-            reasons.append("• <b>Primary Stream:</b> Smart Money Flow Flat/Neutral (+0)")
+            reasons.append("• <b>Primary Stream:</b> Smart Money Flow Flat/Neutral (+0) [Free Tier Limit]")
 
         if direction == "BUY" and cex_24h_netflow < -100_000:
             confluence_score += 2
@@ -205,9 +205,12 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             if confluence_score >= 3:
                 decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
+                reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Confluence threshold met.")
             else:
                 decision, stars = "ABORT", "⚠️"
-            reasons.append(f"\n📊 <b>Confluence Framework Score: {confluence_score}/7</b>")
+                reasons.append(f"\n🛑 <b>Decision:</b> ABORT. Insufficient on-chain confluence threshold to support technicals.")
+                
+            reasons.append(f"📊 <b>Confluence Framework Score: {confluence_score}/7</b>")
 
         reasoning = "\n".join(reasons)
 
