@@ -78,8 +78,9 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
     raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
     is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
     
-    dir_label = "LONG" if payload.direction.upper() == "BUY" else "SHORT"
-    direction = payload.direction.upper()
+    raw_dir = payload.direction.upper()
+    direction = "LONG" if raw_dir in ["BUY", "LONG"] else "SHORT"
+    dir_label = direction
     decision, stars, reasoning, metric_display = "EXECUTE", "⭐⭐⭐", "", "Processing Data Matrix..."
 
     if is_forex:
@@ -124,7 +125,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             reasons.append("\n• <b>Topology:</b> Non-USD Cross. Evaluating on pure technicals.")
 
         # 3. Execution Alignment
-        if direction == "BUY" and macro_bias_for_pair > 0:
+        if direction == "LONG" and macro_bias_for_pair > 0:
             decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
             reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with LONG setup.")
         elif direction == "SHORT" and macro_bias_for_pair < 0:
@@ -172,7 +173,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         confluence_score = 0
         reasons = []
 
-        if direction == "BUY" and smart_money_flow > 500_000:
+        if direction == "LONG" and smart_money_flow > 500_000:
             confluence_score += 3
             reasons.append("• <b>Primary Stream:</b> Smart Money Accumulation Mapped (+3)")
         elif direction == "SHORT" and smart_money_flow < -500_000:
@@ -181,7 +182,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             reasons.append("• <b>Primary Stream:</b> Smart Money Flow Flat/Neutral (+0) [Free Tier Limit]")
 
-        if direction == "BUY" and cex_24h_netflow < -100_000:
+        if direction == "LONG" and cex_24h_netflow < -100_000:
             confluence_score += 2
             reasons.append("• <b>Secondary Stream:</b> Exchange Supply Shock / Outflows Verified (+2)")
         elif direction == "SHORT" and cex_24h_netflow > 100_000:
@@ -190,7 +191,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             reasons.append("• <b>Secondary Stream:</b> Exchange Supply Balance Stable (+0)")
 
-        if direction == "BUY" and perp_leaderboard_bias == "LONG":
+        if direction == "LONG" and perp_leaderboard_bias == "LONG":
             confluence_score += 2
             reasons.append("• <b>Tertiary Stream:</b> High-PnL Perp Traders Positioned LONG (+2)")
         elif direction == "SHORT" and perp_leaderboard_bias == "SHORT":

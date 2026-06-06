@@ -1,8 +1,8 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © FV Ribbon - 4H Proximity (Ignition Override)
+// © FV Ribbon - Apex Ignition V26 (Dual Engine & Pure CT Matrix)
 
 //@version=6
-indicator("FV Ribbon [Apex Ignition]", shorttitle = "FV Apex Ignite", overlay = true)
+indicator("FV Ribbon [Apex Ignite V26]", shorttitle = "FV Apex V26", overlay = true)
 
 //-----------------------------------------------------------------------------
 // On-Chart MAs
@@ -14,11 +14,12 @@ fast_ma = ta.ema(close, ma1_length)
 slow_ma = ta.sma(close, ma2_length)
 
 //-----------------------------------------------------------------------------
-// 4H Background Shield (20/50 EMA) + Proximity Buffer
+// 4H Background Shield
 //-----------------------------------------------------------------------------
 ema20_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 20))
 ema50_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 50))
 
+// Visual proximity buffer for the background colors
 dist_pct = math.abs(ema20_4h - ema50_4h) / ema50_4h * 100
 prox_input = input.float(0.25, "Early Crossover Proximity (%)", step=0.05)
 
@@ -27,141 +28,121 @@ allow_short = (ema20_4h < ema50_4h) or ((ema20_4h > ema50_4h) and (dist_pct <= p
 
 bgcolor(allow_long ? color.new(#089981, 92) : allow_short ? color.new(#f23645, 92) : na, title="4H Trend Background")
 
-// --- Vertical Proximity Line ---
-var bool prox_line_drawn = false
-if (dist_pct <= prox_input)
-    if not prox_line_drawn
-        line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(color.white, 60), style=line.style_dashed, width=1)
-        prox_line_drawn := true
-else
-    prox_line_drawn := false
+//-----------------------------------------------------------------------------
+// --- ENGINE 1: CHOP KILLER (50 SMA Slope) ---
+//-----------------------------------------------------------------------------
+// In horizontal chop (like Asian session), the 50 SMA goes flat. This blocks signals.
+min_slope = input.float(0.03, "Min 50 SMA Slope (%) - Blocks Chop", step=0.01)
+bull_slope = (slow_ma - nz(slow_ma[5])) / nz(slow_ma[5]) * 100
+bear_slope = (nz(slow_ma[5]) - slow_ma) / nz(slow_ma[5]) * 100
+
+is_choppy_bull = bull_slope < min_slope
+is_choppy_bear = bear_slope < min_slope
 
 //-----------------------------------------------------------------------------
-// Horizontal Ribbon Filter (50 SMA Anchor Slope)
-//-----------------------------------------------------------------------------
-// This solves the "firing when flat" issue. 
-// A pullback dips the 20 EMA, but the 50 SMA should remain angled.
-min_slope = input.float(0.02, "Min 50 SMA Slope (%)", step=0.01, tooltip="Disarms the ribbon if the overall trend goes completely flat.")
-bull_slope = ta.roc(slow_ma, 5)
-bear_slope = -ta.roc(slow_ma, 5)
-
-bull_is_flat = bull_slope < min_slope
-bear_is_flat = bear_slope < min_slope
-
-//-----------------------------------------------------------------------------
-// Trigger Conditions (Dynamic Gap, Velocity, & Duration)
+// --- ENGINE 2: PRICE ROCKET OVERRIDE ---
 //-----------------------------------------------------------------------------
 macro_atr = ta.atr(100)
 safe_atr = math.max(macro_atr, 0.0001)
 
-gap_atr = math.abs(fast_ma - slow_ma) / safe_atr
+thrust_lookback = input.int(3, "Price Thrust Lookback (Bars)")
+thrust_req = input.float(1.5, "Vertical Price Thrust Req (ATR)", step=0.1, tooltip="If raw price moves this many ATRs, it instantly ignites, bypassing the chop filter.")
+
+// We measure the RAW PRICE thrust to instantly catch massive vertical rockets.
+price_thrust_bull = (close - nz(close[thrust_lookback])) / safe_atr
+price_thrust_bear = (nz(close[thrust_lookback]) - close) / safe_atr
+
+is_rocket_bull = (fast_ma > slow_ma) and (price_thrust_bull >= thrust_req)
+is_rocket_bear = (fast_ma < slow_ma) and (price_thrust_bear >= thrust_req)
+
+//-----------------------------------------------------------------------------
+// --- CORE GAP METRICS ---
+//-----------------------------------------------------------------------------
+gap_raw = math.abs(fast_ma - slow_ma)
+gap_atr = gap_raw / safe_atr
 req_gap = input.float(0.5, "Required Gap (Macro ATR)", step=0.1)
 
-bars_since_bull_cross = ta.barssince(ta.crossover(fast_ma, slow_ma))
-bars_since_bear_cross = ta.barssince(ta.crossunder(fast_ma, slow_ma))
+//-----------------------------------------------------------------------------
+// --- THE COUNTER-TREND MATRIX (Pure 4H Logic) ---
+//-----------------------------------------------------------------------------
+// Strictly relies on the pure background direction, ignoring visual proximity buffers.
+pure_bg_bull = ema20_4h > ema50_4h
+pure_bg_bear = ema20_4h < ema50_4h
 
-grace_period = input.int(8, "Fresh Cross Grace (Bars)", tooltip="Halves the gap requirement for early pullbacks.")
-dyn_bull_gap = (bars_since_bull_cross <= grace_period) ? (req_gap * 0.5) : req_gap
-dyn_bear_gap = (bars_since_bear_cross <= grace_period) ? (req_gap * 0.5) : req_gap
+is_ct_bull = pure_bg_bear // A Long setup forming while the 4H is Red
+is_ct_bear = pure_bg_bull // A Short setup forming while the 4H is Green
 
-bull_vel = ta.roc(fast_ma, 3) 
-bear_vel = -ta.roc(fast_ma, 3) 
-req_vel = input.float(0.04, "Required 20 EMA Velocity (%)", step=0.01)
+ct_max_bars = input.int(16, "Counter-Trend Max Duration (Bars)", tooltip="If opposing the HTF, forces ribbon to disarm after this many bars.")
+bars_bull = ta.barssince(ta.crossover(fast_ma, slow_ma))
+bars_bear = ta.barssince(ta.crossunder(fast_ma, slow_ma))
 
-prolonged_bars = input.int(15, "Prolonged Trend Override (Bars)")
-bull_prolonged = ta.barssince(fast_ma <= slow_ma) >= prolonged_bars
-bear_prolonged = ta.barssince(fast_ma >= slow_ma) >= prolonged_bars
-
-// Require the 50 SMA to NOT be flat in order to trigger the arming sequence.
-bull_trigger = (fast_ma > slow_ma) and (gap_atr >= dyn_bull_gap) and (bull_vel >= req_vel or (bull_prolonged and bull_vel > 0)) and not bull_is_flat
-bear_trigger = (fast_ma < slow_ma) and (gap_atr >= dyn_bear_gap) and (bear_vel >= req_vel or (bear_prolonged and bear_vel > 0)) and not bear_is_flat
+// Exhaustion Kill-Switches
+ct_exhausted_bull = is_ct_bull and (bars_bull >= ct_max_bars)
+ct_exhausted_bear = is_ct_bear and (bars_bear >= ct_max_bars)
 
 //-----------------------------------------------------------------------------
-// Sustain Filter
+// --- IGNITION TRIGGERS ---
 //-----------------------------------------------------------------------------
-fan_hold = input.int(1, "Sustain Bars to Arm", minval=1)
-bull_sustained = ta.barssince(not bull_trigger) >= fan_hold
-bear_sustained = ta.barssince(not bear_trigger) >= fan_hold
+// Trigger if (Engine 1 is valid OR Engine 2 is valid) AND we aren't exhausted.
+std_bull = (fast_ma > slow_ma) and (gap_atr >= req_gap) and not is_choppy_bull
+std_bear = (fast_ma < slow_ma) and (gap_atr >= req_gap) and not is_choppy_bear
+
+trigger_bull = (std_bull or is_rocket_bull) and not ct_exhausted_bull
+trigger_bear = (std_bear or is_rocket_bear) and not ct_exhausted_bear
 
 //-----------------------------------------------------------------------------
-// LATCHING ARMED STATE
+// --- LATCH & LOCK-OPEN MEMORY ---
 //-----------------------------------------------------------------------------
-var bool bull_is_armed = false
-var bool bear_is_armed = false
+var bool bull_ignited = false
+var bool bear_ignited = false
 
-if bull_sustained
-    bull_is_armed := true
-if bear_sustained
-    bear_is_armed := true
+if trigger_bull
+    bull_ignited := true
+if trigger_bear
+    bear_ignited := true
 
-// NEW: If the 50 SMA goes horizontal (flat), immediately disarm the ribbon.
-if (gap_atr < dyn_bull_gap * 0.7) or (close < slow_ma) or ta.crossunder(fast_ma, slow_ma) or not allow_long or bull_is_flat
-    bull_is_armed := false
-if (gap_atr < dyn_bear_gap * 0.7) or (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or not allow_short or bear_is_flat
-    bear_is_armed := false
+// The Latch is explicitly destroyed by Structural Death OR Counter-Trend Exhaustion
+if (close < slow_ma) or ta.crossunder(fast_ma, slow_ma) or ct_exhausted_bull
+    bull_ignited := false
+if (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or ct_exhausted_bear
+    bear_ignited := false
 
-//-----------------------------------------------------------------------------
 // Visual Ribbon
-//-----------------------------------------------------------------------------
-color ribbon_color = bull_is_armed ? color.new(#089981, 75) : bear_is_armed ? color.new(#f23645, 75) : color.new(color.gray, 90)
-
-p1 = plot(fast_ma, "Fast 20 EMA", color=bull_is_armed or bear_is_armed ? #f6c309 : color.gray, linewidth=2)
-p2 = plot(slow_ma, "Slow 50 SMA", color=bull_is_armed or bear_is_armed ? #fb9800 : color.gray, linewidth=2)
-
+color ribbon_color = bull_ignited ? color.new(#089981, 75) : bear_ignited ? color.new(#f23645, 75) : color.new(color.gray, 90)
+p1 = plot(fast_ma, "Fast 20 EMA", color=bull_ignited or bear_ignited ? #f6c309 : color.gray, linewidth=2)
+p2 = plot(slow_ma, "Slow 50 SMA", color=bull_ignited or bear_ignited ? #fb9800 : color.gray, linewidth=2)
 fill(p1, p2, color=ribbon_color, title="Armed FV Zone")
 
 //-----------------------------------------------------------------------------
-// Execution: Smart PA Filter (Mirrored) & Strict Retest Limits
+// --- FIRST STRIKE EXECUTION (The Wick) ---
 //-----------------------------------------------------------------------------
-var int bull_retests = 0
-var int bear_retests = 0
-var int last_bull_dot = 0
-var int last_bear_dot = 0
-spam_lock_bars = 3 
+var int bull_hits = 0
+var int bear_hits = 0
 
-if ta.crossover(fast_ma, slow_ma)
-    bull_retests := 0
-    bear_retests := 3
-if ta.crossunder(fast_ma, slow_ma)
-    bear_retests := 0
-    bull_retests := 3
+// Reset hits when the ribbon turns gray
+if not bull_ignited
+    bull_hits := 0
+if not bear_ignited
+    bear_hits := 0
 
-// --- THE SMART PA FILTER ---
-bull_bleed = (low < low[1] and low[1] < low[2]) or (high < high[1] and high[1] < high[2])
-bear_bleed = (high > high[1] and high[1] > high[2]) or (low > low[1] and low[1] > low[2])
+bull_pierce = (low <= fast_ma)
+bear_pierce = (high >= fast_ma)
 
-// The Wick Rejection Override
-bull_wick_size = math.min(open, close) - low
-bull_body_size = math.abs(open - close)
-strong_bull_rejection = bull_wick_size > (bull_body_size * 2)
-
-bear_wick_size = high - math.max(open, close)
-bear_body_size = math.abs(open - close)
-strong_bear_rejection = bear_wick_size > (bear_body_size * 2)
-
-bull_touch      = low <= fast_ma
-bull_close_safe = close >= slow_ma
-bull_wick_absorbed = bull_touch and bull_close_safe and (not bull_bleed or strong_bull_rejection)
-
-bear_touch      = high >= fast_ma
-bear_close_safe = close <= slow_ma
-bear_wick_absorbed = bear_touch and bear_close_safe and (not bear_bleed or strong_bear_rejection)
+bull_safe_close = (close >= slow_ma)
+bear_safe_close = (close <= slow_ma)
 
 bull_dot = false
 bear_dot = false
 
 if barstate.isconfirmed
-    if allow_long and bull_is_armed and bull_retests < 2
-        if bull_wick_absorbed and (bar_index - last_bull_dot > spam_lock_bars)
-            bull_dot := true
-            bull_retests += 1
-            last_bull_dot := bar_index
+    // We do NOT use allow_long here. The Counter-Trend matrix natively governs opposing trades now.
+    if bull_ignited and bull_pierce and bull_safe_close and (bull_hits < 1)
+        bull_dot := true
+        bull_hits += 1
 
-    if allow_short and bear_is_armed and bear_retests < 2
-        if bear_wick_absorbed and (bar_index - last_bear_dot > spam_lock_bars)
-            bear_dot := true
-            bear_retests += 1
-            last_bear_dot := bar_index
+    if bear_ignited and bear_pierce and bear_safe_close and (bear_hits < 1)
+        bear_dot := true
+        bear_hits += 1
 
 //-----------------------------------------------------------------------------
 // Visual Markers & Alerts
@@ -169,5 +150,5 @@ if barstate.isconfirmed
 plotshape(bull_dot, title="Bullish Fanned Retest", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
 plotshape(bear_dot, title="Bearish Fanned Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-alertcondition(bull_dot, "Long Retest", "4H Shield. PA Safe. Check 1m Trinity.")
-alertcondition(bear_dot, "Short Retest", "4H Shield. PA Safe. Check 1m Trinity.")
+alertcondition(bull_dot, "Long Retest", "PA Safe. Check HTF Context and 1m Trinity.")
+alertcondition(bear_dot, "Short Retest", "PA Safe. Check HTF Context and 1m Trinity.")
