@@ -9,10 +9,9 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.0")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.1")
 
 # --- THE MACRO PEAD CACHE ---
-# Updated to track release dates and duration of the macro trend
 MACRO_CACHE = {
     "cpi": {"status": "HOT", "date": "May 12, 2026 (Apr Data)"},       
     "yields": {"status": "RISING", "date": "Live Treasury Feed"}, 
@@ -54,7 +53,7 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "Engine V5.0 Active"}
+    return {"status": "Engine V5.1 Active - Alpha Vantage Fallback Engaged"}
 
 async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
     if chain.lower() == "solana": return 5000000.0
@@ -69,6 +68,34 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
                 return sum([float(pool.get("attributes", {}).get("reserve_in_usd", 0.0)) for pool in data])
         except: pass
     return 1000000.0
+
+# --- ALPHA VANTAGE FALLBACK ROUTER ---
+async def fetch_alpha_volume_telemetry(symbol: str):
+    """Fetches daily volume to measure institutional footprint if Nansen is locked."""
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "demo")
+    clean_sym = symbol.replace("W", "") if symbol.startswith("W") else symbol
+    url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={clean_sym}&market=USD&apikey={api_key}"
+    
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            res = await client.get(url)
+            data = res.json()
+            time_series = data.get("Time Series (Digital Currency Daily)", {})
+            if not time_series:
+                return 0.0
+            
+            days = list(time_series.keys())
+            if len(days) < 2:
+                return 0.0
+                
+            today_vol = float(time_series[days[0]].get("5. volume", 0))
+            yest_vol = float(time_series[days[1]].get("5. volume", 0))
+            
+            if yest_vol == 0: return 0.0
+            vol_expansion = ((today_vol - yest_vol) / yest_vol) * 100
+            return vol_expansion
+        except:
+            return 0.0
 
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
@@ -88,43 +115,34 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         symbol = f"{base_ccy}_{quote_ccy}"
         sector = f"Global FX | {base_ccy}-{quote_ccy} Cross"
         
-        # 🛡️ THE FOREX MACRO PEAD MATRIX
         usd_strength = 0
         reasons = []
 
-        # 1. Calculate USD Strength from Cache & Explain Economic Impact
         if MACRO_CACHE["cpi"]["status"] == "HOT": 
             usd_strength += 2
-            reasons.append(f"• <b>Inflation:</b> CPI Hot (+2) | <i>Increases USD Value (Hawkish Fed)</i> | Updated: {MACRO_CACHE['cpi']['date']}")
-        elif MACRO_CACHE["cpi"]["status"] == "COLD":
-            usd_strength -= 2
+            reasons.append(f"• <b>Inflation:</b> CPI Hot (+2) | <i>Increases USD Value (Hawkish Fed)</i>")
+        elif MACRO_CACHE["cpi"]["status"] == "COLD": usd_strength -= 2
             
         if MACRO_CACHE["yields"]["status"] == "RISING":
             usd_strength += 2
-            reasons.append(f"• <b>Yields:</b> 10Y Treasury Rising (+2) | <i>Increases USD Value (Capital Inflows)</i> | Updated: {MACRO_CACHE['yields']['date']}")
-        elif MACRO_CACHE["yields"]["status"] == "FALLING":
-            usd_strength -= 2
+            reasons.append(f"• <b>Yields:</b> 10Y Treasury Rising (+2) | <i>Increases USD Value (Capital Inflows)</i>")
+        elif MACRO_CACHE["yields"]["status"] == "FALLING": usd_strength -= 2
             
         if MACRO_CACHE["nfp"]["status"] == "STRONG":
             usd_strength += 2
-            reasons.append(f"• <b>Labor:</b> NFP Strong (+2) | <i>Increases USD Value (Rate Cut Delay)</i> | Updated: {MACRO_CACHE['nfp']['date']}")
-        elif MACRO_CACHE["nfp"]["status"] == "WEAK":
-            usd_strength -= 2
+            reasons.append(f"• <b>Labor:</b> NFP Strong (+2) | <i>Increases USD Value (Rate Cut Delay)</i>")
+        elif MACRO_CACHE["nfp"]["status"] == "WEAK": usd_strength -= 2
 
-        # 2. The Dynamic Flipper (Explicit Inversion Logic)
         macro_bias_for_pair = 0
         if quote_ccy == "USD":
-            # e.g., EUR/USD. Strong USD pushes pair down.
             macro_bias_for_pair = -usd_strength
-            reasons.append(f"\n• <b>Topology:</b> USD is Quote ({base_ccy}/{quote_ccy}). A stronger Dollar inherently suppresses the base currency, driving the pair's price DOWN. Pair trend inverted (Bias: {macro_bias_for_pair}).")
+            reasons.append(f"\n• <b>Topology:</b> USD is Quote. Pair trend inverted (Bias: {macro_bias_for_pair}).")
         elif base_ccy == "USD":
-            # e.g., USD/JPY. Strong USD pushes pair up.
             macro_bias_for_pair = usd_strength
-            reasons.append(f"\n• <b>Topology:</b> USD is Base ({base_ccy}/{quote_ccy}). A stronger Dollar directly drives the pair's price UP. Pair trend direct (Bias: {macro_bias_for_pair}).")
+            reasons.append(f"\n• <b>Topology:</b> USD is Base. Pair trend direct (Bias: {macro_bias_for_pair}).")
         else:
             reasons.append("\n• <b>Topology:</b> Non-USD Cross. Evaluating on pure technicals.")
 
-        # 3. Execution Alignment
         if direction == "LONG" and macro_bias_for_pair > 0:
             decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
             reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with LONG setup.")
@@ -142,7 +160,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         reasoning = "\n".join(reasons)
 
     else:
-        # --- CRYPTO GHOST LAYER & MATRIX ---
+        # --- CRYPTO MATRIX ---
         lookup_key = raw_ticker.split(":")[-1]
         for stable in ["USDT", "USDC", "USD"]:
             if lookup_key.endswith(stable) and lookup_key != stable:
@@ -153,7 +171,6 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         token_info = TOKEN_MAP.get(symbol)
 
         if not token_info:
-            print(f"🛑 GHOST LAYER: {symbol} bypassed. Tracking matrix clean.")
             return {"status": "ignored", "reason": "Asset not configured."}
 
         sector = token_info.get("sector")
@@ -180,25 +197,22 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
             confluence_score += 3
             reasons.append("• <b>Primary Stream:</b> Smart Money Heavy Distribution Mapped (+3)")
         else:
-            reasons.append("• <b>Primary Stream:</b> Smart Money Flow Flat/Neutral (+0) [Free Tier Limit]")
+            reasons.append("• <b>Primary Stream:</b> Smart Money Null [Nansen Restrict].")
 
-        if direction == "LONG" and cex_24h_netflow < -100_000:
-            confluence_score += 2
-            reasons.append("• <b>Secondary Stream:</b> Exchange Supply Shock / Outflows Verified (+2)")
-        elif direction == "SHORT" and cex_24h_netflow > 100_000:
-            confluence_score += 2
-            reasons.append("• <b>Secondary Stream:</b> Exchange Inflows / Increase in Sell Pressures (+2)")
-        else:
-            reasons.append("• <b>Secondary Stream:</b> Exchange Supply Balance Stable (+0)")
-
-        if direction == "LONG" and perp_leaderboard_bias == "LONG":
-            confluence_score += 2
-            reasons.append("• <b>Tertiary Stream:</b> High-PnL Perp Traders Positioned LONG (+2)")
-        elif direction == "SHORT" and perp_leaderboard_bias == "SHORT":
-            confluence_score += 2
-            reasons.append("• <b>Tertiary Stream:</b> High-PnL Perp Traders Positioned SHORT (+2)")
-        else:
-            reasons.append("• <b>Tertiary Stream:</b> Derivatives Bias Neutral (+0)")
+        # --- ALPHA VANTAGE FALLBACK ACTIVATION ---
+        if confluence_score == 0:
+            reasons.append("\n🔄 <b>ROUTING:</b> Initiating Alpha Vantage Volume Fallback...")
+            vol_expansion = await fetch_alpha_volume_telemetry(symbol)
+            
+            if vol_expansion > 10.0:
+                confluence_score += 3
+                reasons.append(f"• <b>Fallback Telemetry:</b> Volume Expansion Detected (+{vol_expansion:.1f}%) (+3)")
+                metric_display = f"Vol +{vol_expansion:.1f}%"
+            elif vol_expansion < -10.0:
+                reasons.append(f"• <b>Fallback Telemetry:</b> Volume Contracting ({vol_expansion:.1f}%). Insufficient momentum.")
+                metric_display = f"Vol {vol_expansion:.1f}%"
+            else:
+                reasons.append(f"• <b>Fallback Telemetry:</b> Volume Flat. No Institutional Footprint (+0)")
 
         if pool_liquidity < 250000.0:
             decision, stars = "ABORT", "⚠️"
@@ -206,7 +220,7 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         else:
             if confluence_score >= 3:
                 decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
-                reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Confluence threshold met.")
+                reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Confluence threshold met via Fallback.")
             else:
                 decision, stars = "ABORT", "⚠️"
                 reasons.append(f"\n🛑 <b>Decision:</b> ABORT. Insufficient on-chain confluence threshold to support technicals.")
@@ -224,11 +238,11 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"🏷️ <b>Sector:</b> <code>{sector}</code>\n"
         f"📊 <b>TF:</b> <code>{payload.timeframe}m</code> | <b>Price:</b> <code>${price_display}</code>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{'🌍 <b>MACRO TELEMETRY</b>' if is_forex else '🛡️ <b>ON-CHAIN INTELLIGENCE</b>'}\n"
+        f"{'🌍 <b>MACRO TELEMETRY</b>' if is_forex else '🛡️ <b>INSTITUTIONAL INTELLIGENCE</b>'}\n"
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
-        f"📈 <i>Confluence Engine V5.0</i>"
+        f"📈 <i>Confluence Engine V5.1</i>"
     )
 
     background_tasks.add_task(send_telegram_notification, rich_message)
