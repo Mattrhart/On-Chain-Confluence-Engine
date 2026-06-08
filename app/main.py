@@ -9,7 +9,7 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.1.1")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.1.2")
 
 # --- THE MACRO PEAD CACHE ---
 MACRO_CACHE = {
@@ -53,7 +53,7 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "Engine V5.1.1 Active - Async Background Routing Engaged"}
+    return {"status": "Engine V5.1.2 Active - Hybrid Volume Routing Engaged"}
 
 async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
     if chain.lower() == "solana": return 5000000.0
@@ -69,33 +69,41 @@ async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
         except: pass
     return 1000000.0
 
-# --- ALPHA VANTAGE FALLBACK ROUTER ---
+# --- THE HYBRID VOLUME ROUTER ---
 async def fetch_alpha_volume_telemetry(symbol: str):
-    """Fetches daily volume to measure institutional footprint if Nansen is locked."""
+    """Fetches daily volume expansion for supported Alpha Vantage legacy assets."""
     api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "demo")
     clean_sym = symbol.replace("W", "") if symbol.startswith("W") else symbol
     url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={clean_sym}&market=USD&apikey={api_key}"
-    
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
             res = await client.get(url)
             data = res.json()
-            time_series = data.get("Time Series (Digital Currency Daily)", {})
-            if not time_series:
-                return 0.0
-            
+            time_series = data.get("Time Series (Digital Currency Daily)")
+            if not time_series: return 0.0
             days = list(time_series.keys())
-            if len(days) < 2:
-                return 0.0
-                
+            if len(days) < 2: return 0.0
             today_vol = float(time_series[days[0]].get("5. volume", 0))
             yest_vol = float(time_series[days[1]].get("5. volume", 0))
-            
             if yest_vol == 0: return 0.0
-            vol_expansion = ((today_vol - yest_vol) / yest_vol) * 100
-            return vol_expansion
-        except:
-            return 0.0
+            return ((today_vol - yest_vol) / yest_vol) * 100
+        except: return 0.0
+
+async def fetch_gecko_24h_volume(chain: str, address: str) -> float:
+    """Alternative raw USD volume check for unlisted DeFi/DEX assets."""
+    if chain.lower() == "solana": return 15000000.0
+    if chain.lower() == "hyperevm": return 25000000.0
+    
+    url = f"https://api.geckoterminal.com/api/v2/networks/{chain.lower()}/tokens/{address}"
+    headers = {"Accept": "application/json;version=20230302"}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            res = await client.get(url, headers=headers)
+            if res.status_code == 200:
+                data = res.json().get("data", {})
+                return float(data.get("attributes", {}).get("volume_usd", {}).get("h24", 0.0))
+        except: pass
+    return 0.0
 
 # --- THE BACKGROUND WORKER (Heavy Lifting) ---
 async def process_tradingview_signal(payload: TradingViewPayload):
@@ -169,7 +177,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
 
         if not token_info:
             print(f"🛑 GHOST LAYER: {symbol} bypassed. Tracking matrix clean.")
-            return # Exits the background task quietly if asset is unconfigured
+            return
 
         sector = token_info.get("sector")
         pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
@@ -179,8 +187,6 @@ async def process_tradingview_signal(payload: TradingViewPayload):
             metrics = {"net_flow_24h": 0, "cex_netflow": 0, "perp_bias": "NEUTRAL"}
 
         smart_money_flow = metrics.get("net_flow_24h", 0)
-        cex_24h_netflow = metrics.get("cex_netflow", 0)
-        perp_leaderboard_bias = metrics.get("perp_bias", "NEUTRAL")
 
         if abs(smart_money_flow) >= 1_000_000: metric_display = f"${smart_money_flow/1e6:+.2f}M Flow"
         else: metric_display = f"${smart_money_flow/1e3:+.1f}K Flow"
@@ -197,20 +203,32 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         else:
             reasons.append("• <b>Primary Stream:</b> Smart Money Null [Nansen Restrict].")
 
-        # --- ALPHA VANTAGE FALLBACK ACTIVATION ---
+        # --- HYBRID VOLUME FALLBACK ACTIVATION ---
         if confluence_score == 0:
-            reasons.append("\n🔄 <b>ROUTING:</b> Initiating Alpha Vantage Volume Fallback...")
+            reasons.append("\n🔄 <b>ROUTING:</b> Initiating Hybrid Volume Fallback...")
             vol_expansion = await fetch_alpha_volume_telemetry(symbol)
             
             if vol_expansion > 10.0:
                 confluence_score += 3
-                reasons.append(f"• <b>Fallback Telemetry:</b> Volume Expansion Detected (+{vol_expansion:.1f}%) (+3)")
+                reasons.append(f"• <b>Alpha Vantage:</b> Volume Expansion Detected (+{vol_expansion:.1f}%) (+3)")
                 metric_display = f"Vol +{vol_expansion:.1f}%"
             elif vol_expansion < -10.0:
-                reasons.append(f"• <b>Fallback Telemetry:</b> Volume Contracting ({vol_expansion:.1f}%). Insufficient momentum.")
+                reasons.append(f"• <b>Alpha Vantage:</b> Volume Contracting ({vol_expansion:.1f}%). Insufficient momentum.")
                 metric_display = f"Vol {vol_expansion:.1f}%"
             else:
-                reasons.append(f"• <b>Fallback Telemetry:</b> Volume Flat. No Institutional Footprint (+0)")
+                # Alpha Vantage returned 0 (Asset Unlisted). Pivot instantly to GeckoTerminal.
+                reasons.append(f"• <b>Alpha Vantage:</b> Data Null/Unlisted. Pivoting to On-Chain DEX Volume...")
+                gecko_vol = await fetch_gecko_24h_volume(chain=token_info.get("chain"), address=token_info.get("address"))
+                
+                if gecko_vol >= 2_000_000:
+                    confluence_score += 3
+                    reasons.append(f"• <b>GeckoTerminal:</b> Heavy Institutional DEX Volume Confirmed (${gecko_vol/1e6:.1f}M) (+3)")
+                    metric_display = f"DEX ${gecko_vol/1e6:.1f}M"
+                elif gecko_vol > 0:
+                    reasons.append(f"• <b>GeckoTerminal:</b> Weak DEX Volume (${gecko_vol/1e6:.2f}M). No Institutional Footprint (+0)")
+                    metric_display = f"DEX ${gecko_vol/1e6:.2f}M"
+                else:
+                    reasons.append(f"• <b>GeckoTerminal:</b> Volume tracking unavailable (+0)")
 
         if pool_liquidity < 250000.0:
             decision, stars = "ABORT", "⚠️"
@@ -240,14 +258,13 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
-        f"📈 <i>Confluence Engine V5.1.1</i>"
+        f"📈 <i>Confluence Engine V5.1.2</i>"
     )
 
-    # Await the Telegram send directly since we are already in a background task
     await send_telegram_notification(rich_message)
 
 
-# --- THE NEW LIGHTNING-FAST WEBHOOK ENDPOINT ---
+# --- THE LIGHTNING-FAST WEBHOOK ENDPOINT ---
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
 async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
