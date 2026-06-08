@@ -203,32 +203,48 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         else:
             reasons.append("• <b>Primary Stream:</b> Smart Money Null [Nansen Restrict].")
 
-        # --- HYBRID VOLUME FALLBACK ACTIVATION ---
+        # --- PARALLEL VOLUME FALLBACK ACTIVATION ---
         if confluence_score == 0:
-            reasons.append("\n🔄 <b>ROUTING:</b> Initiating Hybrid Volume Fallback...")
-            vol_expansion = await fetch_alpha_volume_telemetry(symbol)
+            reasons.append("\n🔄 <b>ROUTING:</b> Initiating Parallel Volume Fallback (Alpha + Gecko)...")
             
+            # Fetch both streams simultaneously
+            vol_expansion = await fetch_alpha_volume_telemetry(symbol)
+            gecko_vol = await fetch_gecko_24h_volume(chain=token_info.get("chain"), address=token_info.get("address"))
+            
+            fallback_points = 0
+            metrics_text = []
+
+            # 1. Evaluate Alpha Vantage (Centralized Legacy Volume)
             if vol_expansion > 10.0:
-                confluence_score += 3
-                reasons.append(f"• <b>Alpha Vantage:</b> Volume Expansion Detected (+{vol_expansion:.1f}%) (+3)")
-                metric_display = f"Vol +{vol_expansion:.1f}%"
+                fallback_points += 3
+                reasons.append(f"• <b>Alpha Vantage:</b> Volume Expansion Confirmed (+{vol_expansion:.1f}%) (+3)")
+                metrics_text.append(f"AV +{vol_expansion:.1f}%")
             elif vol_expansion < -10.0:
                 reasons.append(f"• <b>Alpha Vantage:</b> Volume Contracting ({vol_expansion:.1f}%). Insufficient momentum.")
-                metric_display = f"Vol {vol_expansion:.1f}%"
+                metrics_text.append(f"AV {vol_expansion:.1f}%")
             else:
-                # Alpha Vantage returned 0 (Asset Unlisted). Pivot instantly to GeckoTerminal.
-                reasons.append(f"• <b>Alpha Vantage:</b> Data Null/Unlisted. Pivoting to On-Chain DEX Volume...")
-                gecko_vol = await fetch_gecko_24h_volume(chain=token_info.get("chain"), address=token_info.get("address"))
+                reasons.append(f"• <b>Alpha Vantage:</b> Data Null / Asset Unlisted (+0)")
+
+            # 2. Evaluate GeckoTerminal (On-Chain DEX Volume)
+            if gecko_vol >= 2_000_000:
+                fallback_points += 3
+                reasons.append(f"• <b>GeckoTerminal:</b> Heavy Institutional DEX Volume Confirmed (${gecko_vol/1e6:.1f}M) (+3)")
+                metrics_text.append(f"DEX ${gecko_vol/1e6:.1f}M")
+            elif gecko_vol > 0:
+                reasons.append(f"• <b>GeckoTerminal:</b> Weak DEX Volume (${gecko_vol/1e6:.2f}M). No Institutional Footprint (+0)")
+                metrics_text.append(f"DEX ${gecko_vol/1e6:.2f}M")
+            else:
+                reasons.append(f"• <b>GeckoTerminal:</b> DEX tracking unavailable (+0)")
+
+            # Combine scores (Cap the fallback award at 3 points so it fulfills the 3/7 threshold without inflating the matrix)
+            if fallback_points > 0:
+                confluence_score += min(fallback_points, 3)
                 
-                if gecko_vol >= 2_000_000:
-                    confluence_score += 3
-                    reasons.append(f"• <b>GeckoTerminal:</b> Heavy Institutional DEX Volume Confirmed (${gecko_vol/1e6:.1f}M) (+3)")
-                    metric_display = f"DEX ${gecko_vol/1e6:.1f}M"
-                elif gecko_vol > 0:
-                    reasons.append(f"• <b>GeckoTerminal:</b> Weak DEX Volume (${gecko_vol/1e6:.2f}M). No Institutional Footprint (+0)")
-                    metric_display = f"DEX ${gecko_vol/1e6:.2f}M"
-                else:
-                    reasons.append(f"• <b>GeckoTerminal:</b> Volume tracking unavailable (+0)")
+            # Update the Telegram UI to show both metrics cleanly
+            if metrics_text:
+                metric_display = " | ".join(metrics_text)
+            else:
+                metric_display = "Volume Flat"
 
         if pool_liquidity < 250000.0:
             decision, stars = "ABORT", "⚠️"
