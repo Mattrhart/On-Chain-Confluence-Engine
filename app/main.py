@@ -9,7 +9,7 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.1")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.1.1")
 
 # --- THE MACRO PEAD CACHE ---
 MACRO_CACHE = {
@@ -53,7 +53,7 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "Engine V5.1 Active - Alpha Vantage Fallback Engaged"}
+    return {"status": "Engine V5.1.1 Active - Async Background Routing Engaged"}
 
 async def fetch_dex_liquidity_usd(chain: str, address: str) -> float:
     if chain.lower() == "solana": return 5000000.0
@@ -97,11 +97,8 @@ async def fetch_alpha_volume_telemetry(symbol: str):
         except:
             return 0.0
 
-@app.post("/webhook/tradingview")
-@app.post("/webhook/tradingview/")
-async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
-    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"): raise HTTPException(status_code=401)
-
+# --- THE BACKGROUND WORKER (Heavy Lifting) ---
+async def process_tradingview_signal(payload: TradingViewPayload):
     raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
     is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
     
@@ -171,7 +168,8 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         token_info = TOKEN_MAP.get(symbol)
 
         if not token_info:
-            return {"status": "ignored", "reason": "Asset not configured."}
+            print(f"🛑 GHOST LAYER: {symbol} bypassed. Tracking matrix clean.")
+            return # Exits the background task quietly if asset is unconfigured
 
         sector = token_info.get("sector")
         pool_liquidity = await fetch_dex_liquidity_usd(chain=token_info.get("chain"), address=token_info.get("address"))
@@ -242,8 +240,22 @@ async def tradingview_webhook(payload: TradingViewPayload, background_tasks: Bac
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
-        f"📈 <i>Confluence Engine V5.1</i>"
+        f"📈 <i>Confluence Engine V5.1.1</i>"
     )
 
-    background_tasks.add_task(send_telegram_notification, rich_message)
-    return {"status": "success", "decision": decision}
+    # Await the Telegram send directly since we are already in a background task
+    await send_telegram_notification(rich_message)
+
+
+# --- THE NEW LIGHTNING-FAST WEBHOOK ENDPOINT ---
+@app.post("/webhook/tradingview")
+@app.post("/webhook/tradingview/")
+async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
+    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"): 
+        raise HTTPException(status_code=401)
+
+    # 1. Hand the payload to the background worker
+    background_tasks.add_task(process_tradingview_signal, payload)
+
+    # 2. Instantly hang up the phone with TradingView (Solves the 3-second timeout)
+    return {"status": "success", "message": "Signal securely received, processing matrix in background"}
