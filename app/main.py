@@ -7,7 +7,7 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.2.0")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.2.1")
 
 # --- THE EXPANDED MACRO PEAD CACHE (The 6 Pillars) ---
 MACRO_CACHE = {
@@ -58,57 +58,69 @@ class TradingViewPayload(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "Engine V5.2.0 Active - Omnipotent USD Sentiment Routing Engaged"}
+    return {"status": "Engine V5.2.1 Active - Omnipotent USD Sentiment Routing Engaged"}
 
 # --- OMNIPOTENT USD MACRO CALCULATOR ---
 def calculate_usd_macro_bias():
-    """Calculates the Net USD Strength based on the 6 Core Pillars."""
+    """Calculates Net USD Strength and generates a dynamic narrative summary."""
     usd_strength = 0
     reasons = []
 
     # 1. FOMC (The Heavyweight: +/- 3 points)
     if MACRO_CACHE["fomc"]["status"] == "HAWKISH":
         usd_strength += 3
-        reasons.append(f"• <b>FOMC Tone:</b> Hawkish (+3) | <i>Higher rates -> Capital Inflows</i>")
+        reasons.append(f"• <b>FOMC:</b> Hawkish Hold (+3) | <i>Rates locked at 3.50%-3.75%. Massive capital inflow to USD yield.</i>")
     elif MACRO_CACHE["fomc"]["status"] == "DOVISH": 
         usd_strength -= 3
-        reasons.append(f"• <b>FOMC Tone:</b> Dovish (-3) | <i>Rate cuts -> Capital Outflows</i>")
+        reasons.append(f"• <b>FOMC:</b> Dovish Pivot (-3) | <i>Rate cuts incoming. Capital fleeing USD for risk assets.</i>")
 
     # 2. CPI (Inflation: +/- 2 points)
     if MACRO_CACHE["cpi"]["status"] == "HOT": 
         usd_strength += 2
-        reasons.append(f"• <b>Inflation:</b> CPI Hot (+2) | <i>Forces Hawkish Fed</i>")
+        reasons.append(f"• <b>CPI:</b> Hot (+2) | <i>Inflation sticky. Forces Fed to maintain high terminal rates.</i>")
     elif MACRO_CACHE["cpi"]["status"] == "COLD": 
         usd_strength -= 2
 
     # 3. Treasury Yields (+/- 2 points)
     if MACRO_CACHE["yields"]["status"] == "RISING":
         usd_strength += 2
-        reasons.append(f"• <b>Yields:</b> 10Y Rising (+2) | <i>Increases USD Yield Demand</i>")
+        reasons.append(f"• <b>10Y Yield:</b> Rising (+2) | <i>Bond market pricing in structural 'Higher for Longer' reality.</i>")
     elif MACRO_CACHE["yields"]["status"] == "FALLING": 
         usd_strength -= 2
         
     # 4. NFP (Labor: +/- 2 points)
     if MACRO_CACHE["nfp"]["status"] == "STRONG":
         usd_strength += 2
-        reasons.append(f"• <b>Labor:</b> NFP Strong (+2) | <i>Delays Rate Cuts</i>")
+        reasons.append(f"• <b>Labor:</b> Strong (+2) | <i>No recession panic. Gives Fed room to ignore aggressive cut demands.</i>")
     elif MACRO_CACHE["nfp"]["status"] == "WEAK": 
         usd_strength -= 2
 
     # 5. ISM PMI (Services: +/- 2 points)
     if MACRO_CACHE["pmi"]["status"] == "EXPANSION":
         usd_strength += 2
-        reasons.append(f"• <b>ISM PMI:</b> Expansion >50 (+2) | <i>Service Sector Growth</i>")
+        reasons.append(f"• <b>Services PMI:</b> >50 Expansion (+2) | <i>Service economy booming, compounding structural USD demand.</i>")
     elif MACRO_CACHE["pmi"]["status"] == "CONTRACTION": 
         usd_strength -= 2
 
     # 6. Retail Sales (Consumer: +/- 1 point)
     if MACRO_CACHE["retail_sales"]["status"] == "STRONG":
         usd_strength += 1
-        reasons.append(f"• <b>Retail Sales:</b> Strong (+1) | <i>Resilient Consumer</i>")
+        reasons.append(f"• <b>Retail Sales:</b> Strong (+1) | <i>Consumer spending accelerates. Highly resilient economy.</i>")
     elif MACRO_CACHE["retail_sales"]["status"] == "WEAK": 
         usd_strength -= 1
 
+    # --- DYNAMIC MARKET STATE GENERATOR ---
+    state_summary = ""
+    if usd_strength >= 8:
+        state_summary = "\n🔥 <b>MARKET STATE: Wrecking Ball</b>\n<i>The USD is universally dominant. Risk assets (Crypto/FX Crosses) will face severe, sustained downward pressure.</i>"
+    elif usd_strength <= -8:
+        state_summary = "\n🩸 <b>MARKET STATE: USD Collapse</b>\n<i>The USD is in freefall. Massive liquidity rotation into high-beta risk assets (Crypto/Equities) underway.</i>"
+    elif -3 <= usd_strength <= 3:
+        state_summary = "\n⚖️ <b>MARKET STATE: Choppy / Neutral</b>\n<i>Macro data is conflicting. Asset prices will be driven entirely by local technicals and isolated order flow.</i>"
+    else:
+        state_summary = f"\n📉 <b>MARKET STATE: Trending Bias</b>\n<i>Moderate, structured directional bias established.</i>"
+
+    reasons.append(state_summary)
     return usd_strength, reasons
 
 # --- THE BACKGROUND WORKER (Heavy Lifting) ---
@@ -123,13 +135,18 @@ async def process_tradingview_signal(payload: TradingViewPayload):
 
     # Extract Live USD Telemetry for both branches
     usd_strength, macro_reasons = calculate_usd_macro_bias()
+    
+    # Isolate the narrative messages from the trailing state summary block
+    narrative_points = [p for p in macro_reasons if not p.startswith("\n")]
+    state_summary_block = [p for p in macro_reasons if p.startswith("\n")]
+    state_summary = state_summary_block[0] if state_summary_block else ""
 
     if is_forex:
         base_ccy, quote_ccy = raw_ticker[:3], raw_ticker[3:]
         symbol = f"{base_ccy}_{quote_ccy}"
         sector = f"Global FX | {base_ccy}-{quote_ccy} Cross"
         
-        reasons = macro_reasons.copy()
+        reasons = narrative_points.copy()
         macro_bias_for_pair = 0
         
         if quote_ccy == "USD":
@@ -153,6 +170,9 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         else:
             decision, stars = "ABORT", "⚠️"
             reasons.append("\n🛑 <b>Decision:</b> ABORT. Technical direction fights established macro trend.")
+
+        if state_summary:
+            reasons.append(state_summary)
 
         metric_display = f"USD PEAD: {usd_strength}"
         reasoning = "\n".join(reasons)
@@ -197,7 +217,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
 
         # 2. USD Macro Overlay (Inverse Crypto Correlation)
         reasons.append("\n🌍 <b>MACRO OVERLAY (USD INVERSE CORRELATION):</b>")
-        reasons.extend(macro_reasons)
+        reasons.extend(narrative_points)
         
         # Strong USD = Crypto Bearish (Short). Weak USD = Crypto Bullish (Long).
         crypto_macro_bias = -usd_strength 
@@ -222,6 +242,10 @@ async def process_tradingview_signal(payload: TradingViewPayload):
             reasons.append(f"\n🛑 <b>Decision:</b> ABORT. Insufficient confluence threshold to support technicals.")
             
         reasons.append(f"📊 <b>Confluence Score: {confluence_score}/6</b>")
+        
+        if state_summary:
+            reasons.append(state_summary)
+            
         reasoning = "\n".join(reasons)
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
@@ -251,7 +275,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"━━━━━━━━━━━━━━━\n"
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"⏳ <b>Next Macro Update:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.2.0</i>"
+        f"📈 <i>Confluence Engine V5.2.1</i>"
     )
 
     await send_telegram_notification(rich_message)
