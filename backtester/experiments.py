@@ -22,9 +22,11 @@ INTERVAL, PERIOD, HTF = "1h", "730d", "4h"
 
 CONFIGS = {
     "baseline":        RibbonParams(),
-    "htf_align":       RibbonParams(require_htf_align=True),
     "chop_strong":     RibbonParams(req_gap=1.0, min_slope=0.06),
-    "align+chop":      RibbonParams(require_htf_align=True, req_gap=1.0, min_slope=0.06),
+    "sigma_ang_6":     RibbonParams(use_sigma_angle=True, angle_thresh_deg=6.0),
+    "sigma_ang_10":    RibbonParams(use_sigma_angle=True, angle_thresh_deg=10.0),
+    "sigma_ang_15":    RibbonParams(use_sigma_angle=True, angle_thresh_deg=15.0),
+    "sigma_ang_dir":   RibbonParams(use_sigma_angle=True, angle_thresh_deg=10.0, angle_directional=True),
 }
 
 RISK = RiskParams(atr_sl_mult=1.5, rr_target=1.5)

@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 
+from sigma_angle import yang_zhang_sigma, ics_trend_angle
+
 
 @dataclass
 class RibbonParams:
@@ -28,6 +30,12 @@ class RibbonParams:
     macro_atr_len: int = 100   # ATR used for gap/thrust normalisation
     risk_atr_len: int = 14     # ATR used by the risk model (stops)
     require_htf_align: bool = False  # EXPERIMENT: only take dots aligned with the 4H shield
+    # --- Yang-Zhang sigma-angle chop gate (ST-EP06 port) ---
+    use_sigma_angle: bool = False    # replace crude min_slope chop killer with sigma-angle
+    yz_sigma_len: int = 20           # Yang-Zhang volatility lookback
+    angle_lookback: int = 13         # bars for the ICS trend-angle slope
+    angle_thresh_deg: float = 8.0    # |angle| below this => ranging (suppress dots)
+    angle_directional: bool = False  # also require angle sign to match trade direction
 
 
 # --- ta.* helpers (matched to Pine semantics) -------------------------------
@@ -80,6 +88,14 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
 
     ema20_4h, ema50_4h = df["ema20_4h"], df["ema50_4h"]
 
+    # --- Yang-Zhang sigma-angle (optional chop gate) ---
+    if p.use_sigma_angle:
+        yz_sigma = yang_zhang_sigma(df, p.yz_sigma_len)
+        ics_angle = ics_trend_angle(df["close"], yz_sigma, p.angle_lookback)
+    else:
+        ics_angle = pd.Series(np.nan, index=df.index)
+    df["ics_angle"] = ics_angle
+
     # --- Engine 1: Chop Killer (50 SMA slope) ---
     bull_slope = (slow_ma - slow_ma.shift(5)) / slow_ma.shift(5) * 100
     bear_slope = (slow_ma.shift(5) - slow_ma) / slow_ma.shift(5) * 100
@@ -124,6 +140,7 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
     fast_v = fast_ma.values
     e20_v = ema20_4h.values
     e50_v = ema50_4h.values
+    angle_v = ics_angle.values
 
     tb = trigger_bull.values
     ts = trigger_bear.values
@@ -163,10 +180,20 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
         if not np.isnan(fast_v[i]):
             htf_ok_bull = (not p.require_htf_align) or (e20_v[i] > e50_v[i])
             htf_ok_bear = (not p.require_htf_align) or (e20_v[i] < e50_v[i])
-            if bull_state and htf_ok_bull and (low[i] <= fast_v[i]) and (close[i] >= slow_v[i]) and bull_hits < 1:
+
+            # sigma-angle chop gate: require enough trend strength (and optional sign match)
+            if p.use_sigma_angle:
+                a = angle_v[i]
+                ang_strong = (not np.isnan(a)) and (abs(a) >= p.angle_thresh_deg)
+                ang_ok_bull = ang_strong and ((not p.angle_directional) or a > 0)
+                ang_ok_bear = ang_strong and ((not p.angle_directional) or a < 0)
+            else:
+                ang_ok_bull = ang_ok_bear = True
+
+            if bull_state and htf_ok_bull and ang_ok_bull and (low[i] <= fast_v[i]) and (close[i] >= slow_v[i]) and bull_hits < 1:
                 bull_dot[i] = True
                 bull_hits += 1
-            if bear_state and htf_ok_bear and (high[i] >= fast_v[i]) and (close[i] <= slow_v[i]) and bear_hits < 1:
+            if bear_state and htf_ok_bear and ang_ok_bear and (high[i] >= fast_v[i]) and (close[i] <= slow_v[i]) and bear_hits < 1:
                 bear_dot[i] = True
                 bear_hits += 1
 
