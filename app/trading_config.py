@@ -12,7 +12,7 @@ from __future__ import annotations
 ASSET_MACRO: dict[str, dict] = {
     "ETHUSD":  {"pmi_source": "ism",  "require_non_neutral": False},
     "ETHUSDT": {"pmi_source": "ism",  "require_non_neutral": False},
-    "AUDUSD":  {"pmi_source": "oecd", "require_non_neutral": True},
+    "AUDUSD":  {"pmi_source": "oecd", "require_non_neutral": False},  # V2: volume over no-neutral
     "NZDUSD":  {"pmi_source": "oecd", "require_non_neutral": True},
     "USDJPY":  {"pmi_source": "ism",  "require_non_neutral": False},
     "USDCHF":  {"pmi_source": "ism",  "require_non_neutral": False},

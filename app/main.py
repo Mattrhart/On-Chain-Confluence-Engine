@@ -13,11 +13,11 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
-from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_macro_bias, cache_status
+from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_macro_bias, cache_status, live_pillar_summary
 from app.trading_config import macro_settings_for_ticker
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.4.0")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.5.0")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -78,7 +78,7 @@ async def _startup_macro_cache():
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.4.0 Active - Live 6-Pillar Macro Engaged",
+        "status": "Engine V5.5.0 Active - Live 6-Pillar Macro Engaged",
         "macro_cache": status,
     }
 
@@ -107,6 +107,13 @@ def calculate_tech_pead_bias():
 
     reasons.append(state_summary)
     return pead_score, reasons
+
+
+def _nansen_enabled() -> bool:
+    """Skip Nansen when no API key or SKIP_NANSEN=true (macro-only crypto gate)."""
+    if os.getenv("SKIP_NANSEN", "").lower() in ("1", "true", "yes"):
+        return False
+    return bool(os.getenv("NANSEN_API_KEY"))
 
 
 def _macro_decision(direction: str, macro_bias: int, require_non_neutral: bool) -> tuple[str, str, str]:
@@ -189,6 +196,8 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         else:
             reasons.append("\n• <b>Topology:</b> Non-USD Cross. Evaluating on pure technicals.")
 
+        reasons.append(f"\n• <b>Live FRED:</b> <code>{live_pillar_summary(macro_cfg['pmi_source'])}</code>")
+
         decision, stars, line = _macro_decision(
             direction, macro_bias_for_pair, macro_cfg["require_non_neutral"])
         reasons.append(line)
@@ -214,60 +223,75 @@ async def process_tradingview_signal(payload: TradingViewPayload):
             return
 
         sector = token_info.get("sector")
-
-        metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
-        if not metrics:
-            metrics = {"net_flow_24h": 0, "cex_netflow": 0, "perp_bias": "NEUTRAL"}
-
-        smart_money_flow = metrics.get("net_flow_24h", 0)
-        metric_display = f"${smart_money_flow/1e6:+.2f}M Flow | USD Score: {usd_strength}" if abs(smart_money_flow) >= 1_000_000 else f"${smart_money_flow/1e3:+.1f}K Flow | USD Score: {usd_strength}"
-
-        confluence_score = 0
-        reasons = []
-        reasons.append("🛡️ <b>INSTITUTIONAL LAYER:</b>")
-
-        if direction == "LONG" and smart_money_flow > 500_000:
-            confluence_score += 3
-            reasons.append("• <b>Nansen:</b> Smart Money Accumulation Mapped (+3)")
-        elif direction == "SHORT" and smart_money_flow < -500_000:
-            confluence_score += 3
-            reasons.append("• <b>Nansen:</b> Smart Money Heavy Distribution Mapped (+3)")
-        else:
-            reasons.append("• <b>Nansen:</b> Smart Money Null [Restrict].")
-
-        reasons.append("\n🌍 <b>MACRO OVERLAY (USD INVERSE CORRELATION):</b>")
-        reasons.extend(narrative_points)
-
         crypto_macro_bias = -usd_strength
 
-        if macro_cfg["require_non_neutral"] and crypto_macro_bias == 0:
-            confluence_score -= 3
-            reasons.append("\n• <b>Macro Alignment:</b> ⚠️ No-neutral policy — flat USD macro (-3)")
-        elif direction == "LONG" and crypto_macro_bias > 0:
-            confluence_score += 3
-            reasons.append(f"\n• <b>Macro Alignment:</b> USD Weakness Supports Crypto LONG (+3)")
-        elif direction == "SHORT" and crypto_macro_bias < 0:
-            confluence_score += 3
-            reasons.append(f"\n• <b>Macro Alignment:</b> USD Strength Supports Crypto SHORT (+3)")
-        elif crypto_macro_bias == 0:
-            reasons.append(f"\n• <b>Macro Alignment:</b> Neutral USD Environment (+0)")
+        if not _nansen_enabled():
+            # Macro-only crypto gate (ETH without Nansen subscription)
+            reasons = ["🛡️ <b>INSTITUTIONAL LAYER:</b>",
+                       "• <b>Nansen:</b> Bypassed — macro-only mode (set NANSEN_API_KEY to re-enable)."]
+            reasons.append("\n🌍 <b>MACRO OVERLAY (USD INVERSE CORRELATION):</b>")
+            reasons.extend(narrative_points)
+            reasons.append(f"\n• <b>Live FRED:</b> <code>{live_pillar_summary(macro_cfg['pmi_source'])}</code>")
+            decision, stars, line = _macro_decision(
+                direction, crypto_macro_bias, macro_cfg["require_non_neutral"])
+            reasons.append(line)
+            if state_summary:
+                reasons.append(state_summary)
+            metric_display = f"USD Score: {usd_strength} | PMI: {macro_cfg['pmi_source']} | Macro-Only"
+            reasoning = "\n".join(reasons)
         else:
-            confluence_score -= 3
-            reasons.append(f"\n• <b>Macro Alignment:</b> ⚠️ Technical direction fights USD Macro framework (-3)")
+            metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
+            if not metrics:
+                metrics = {"net_flow_24h": 0, "cex_netflow": 0, "perp_bias": "NEUTRAL"}
 
-        if confluence_score >= 3:
-            decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
-            reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Confluence threshold met.")
-        else:
-            decision, stars = "ABORT", "⚠️"
-            reasons.append(f"\n🛑 <b>Decision:</b> ABORT. Insufficient confluence threshold to support technicals.")
+            smart_money_flow = metrics.get("net_flow_24h", 0)
+            metric_display = f"${smart_money_flow/1e6:+.2f}M Flow | USD Score: {usd_strength}" if abs(smart_money_flow) >= 1_000_000 else f"${smart_money_flow/1e3:+.1f}K Flow | USD Score: {usd_strength}"
 
-        reasons.append(f"📊 <b>Confluence Score: {confluence_score}/6</b>")
+            confluence_score = 0
+            reasons = []
+            reasons.append("🛡️ <b>INSTITUTIONAL LAYER:</b>")
 
-        if state_summary:
-            reasons.append(state_summary)
+            if direction == "LONG" and smart_money_flow > 500_000:
+                confluence_score += 3
+                reasons.append("• <b>Nansen:</b> Smart Money Accumulation Mapped (+3)")
+            elif direction == "SHORT" and smart_money_flow < -500_000:
+                confluence_score += 3
+                reasons.append("• <b>Nansen:</b> Smart Money Heavy Distribution Mapped (+3)")
+            else:
+                reasons.append("• <b>Nansen:</b> Smart Money Null [Restrict].")
 
-        reasoning = "\n".join(reasons)
+            reasons.append("\n🌍 <b>MACRO OVERLAY (USD INVERSE CORRELATION):</b>")
+            reasons.extend(narrative_points)
+            reasons.append(f"\n• <b>Live FRED:</b> <code>{live_pillar_summary(macro_cfg['pmi_source'])}</code>")
+
+            if macro_cfg["require_non_neutral"] and crypto_macro_bias == 0:
+                confluence_score -= 3
+                reasons.append("\n• <b>Macro Alignment:</b> ⚠️ No-neutral policy — flat USD macro (-3)")
+            elif direction == "LONG" and crypto_macro_bias > 0:
+                confluence_score += 3
+                reasons.append(f"\n• <b>Macro Alignment:</b> USD Weakness Supports Crypto LONG (+3)")
+            elif direction == "SHORT" and crypto_macro_bias < 0:
+                confluence_score += 3
+                reasons.append(f"\n• <b>Macro Alignment:</b> USD Strength Supports Crypto SHORT (+3)")
+            elif crypto_macro_bias == 0:
+                reasons.append(f"\n• <b>Macro Alignment:</b> Neutral USD Environment (+0)")
+            else:
+                confluence_score -= 3
+                reasons.append(f"\n• <b>Macro Alignment:</b> ⚠️ Technical direction fights USD Macro framework (-3)")
+
+            if confluence_score >= 3:
+                decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
+                reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Confluence threshold met.")
+            else:
+                decision, stars = "ABORT", "⚠️"
+                reasons.append(f"\n🛑 <b>Decision:</b> ABORT. Insufficient confluence threshold to support technicals.")
+
+            reasons.append(f"📊 <b>Confluence Score: {confluence_score}/6</b>")
+
+            if state_summary:
+                reasons.append(state_summary)
+
+            reasoning = "\n".join(reasons)
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
 
@@ -298,10 +322,35 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
         f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.4.0</i>"
+        f"📈 <i>Confluence Engine V5.5.0</i>"
     )
 
     await send_telegram_notification(rich_message)
+
+
+@app.get("/test-alert")
+async def test_alert(ticker: str = "AUDUSD", direction: str = "LONG"):
+    """
+    Send a live Telegram test using current FRED macro cache.
+    Optional query: ?ticker=ETHUSD&direction=SHORT
+    """
+    secret = os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026")
+    payload = TradingViewPayload(
+        ticker=ticker,
+        price=1.0 if "USD" in ticker.upper() and "ETH" not in ticker.upper() else 3500.0,
+        direction=direction,
+        timeframe="60",
+        secret_token=secret,
+    )
+    await process_tradingview_signal(payload)
+    return {
+        "status": "sent",
+        "ticker": ticker,
+        "direction": direction,
+        "fred_oecd": live_pillar_summary("oecd"),
+        "fred_ism": live_pillar_summary("ism"),
+        "macro_cache": cache_status(),
+    }
 
 
 @app.post("/webhook/tradingview")

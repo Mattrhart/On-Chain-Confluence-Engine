@@ -126,3 +126,15 @@ def calculate_usd_macro_bias(pmi_source: str = "oecd") -> tuple[int, list[str]]:
     state = str(latest.get("market_state", "Trending Bias"))
     reasons.append(STATE_SUMMARY.get(state, STATE_SUMMARY["Trending Bias"]))
     return usd_strength, reasons
+
+
+def live_pillar_summary(pmi_source: str = "oecd") -> str:
+    """One-line FRED pillar score breakdown for Telegram verification."""
+    macro = get_macro_frame(pmi_source)
+    latest = macro.dropna(subset=["usd_strength"]).iloc[-1]
+    parts = []
+    for p in pillars_for(pmi_source):
+        sc = latest.get(f"{p.name}_score", 0)
+        st = latest.get(f"{p.name}_status", "NEUTRAL")
+        parts.append(f"{p.name.upper()}:{st}({int(sc):+d})")
+    return f"PMI={pmi_source} | " + " ".join(parts) + f" | TOTAL={int(latest['usd_strength']):+d}"

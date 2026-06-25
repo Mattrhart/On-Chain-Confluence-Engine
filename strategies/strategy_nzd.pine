@@ -1,8 +1,7 @@
-// FV Ribbon — NZDUSD (strategy_nzd.pine)
-// Optimizer peak: Sharpe 1.82 | PF 1.90 | EMA15/SMA60 | σ≥7° dir | RR 1:1.5
-// Layer 2: PMI=oecd, no-neutral enforced (server-side)
+// FV Ribbon — NZDUSD — Institutional V3
+// Backtest: Sharpe 1.61 | 155 trades/730d | PF 1.58 | σ≥5° | 3 retest dots | RR 1:1.5
 //@version=6
-indicator("FV Ribbon [NZD Opt]", shorttitle="FV NZD", overlay=true)
+indicator("FV Ribbon [NZD V3]", shorttitle="FV NZD", overlay=true)
 
 const float MIN_SIGMA = 1e-10
 const float PI = 3.14159265359
@@ -10,7 +9,9 @@ const int YZ_LEN = 20
 const int ANGLE_LB = 13
 const int MA1_LENGTH = 15
 const int MA2_LENGTH = 60
-const float ANGLE_THRESH = 7.0
+const float ANGLE_THRESH = 5.0
+const int MAX_DOTS = 3
+const bool FIRE_ROCKET = false
 const float RR_TARGET = 1.5
 const float ATR_SL_MULT = 1.5
 
@@ -103,15 +104,23 @@ if not bear_ignited
 bull_dot = false
 bear_dot = false
 if barstate.isconfirmed
-    if bull_ignited and ang_ok_bull and (low <= fast_ma) and (close >= slow_ma) and bull_hits < 1
-        bull_dot := true
-        bull_hits += 1
-    if bear_ignited and ang_ok_bear and (high >= fast_ma) and (close <= slow_ma) and bear_hits < 1
-        bear_dot := true
-        bear_hits += 1
+    if bull_ignited and ang_ok_bull and bull_hits < MAX_DOTS
+        if (low <= fast_ma) and (close >= slow_ma)
+            bull_dot := true
+            bull_hits += 1
+        else if FIRE_ROCKET and is_rocket_bull
+            bull_dot := true
+            bull_hits += 1
+    if bear_ignited and ang_ok_bear and bear_hits < MAX_DOTS
+        if (high >= fast_ma) and (close <= slow_ma)
+            bear_dot := true
+            bear_hits += 1
+        else if FIRE_ROCKET and is_rocket_bear
+            bear_dot := true
+            bear_hits += 1
 
-plotshape(bull_dot, title="Long Retest", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
-plotshape(bear_dot, title="Short Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
+plotshape(bull_dot, title="Long Entry", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
+plotshape(bear_dot, title="Short Entry", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
-alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')

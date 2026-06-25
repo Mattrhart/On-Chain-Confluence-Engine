@@ -36,6 +36,9 @@ class RibbonParams:
     angle_lookback: int = 13         # bars for the ICS trend-angle slope
     angle_thresh_deg: float = 8.0    # |angle| below this => ranging (suppress dots)
     angle_directional: bool = False  # also require angle sign to match trade direction
+    # --- Expansion capture (catch moves beyond first retest) ---
+    max_retest_dots: int = 1         # max entry dots per ribbon arm (1 = legacy first-strike only)
+    fire_rocket_dot: bool = False    # also fire on vertical thrust bar (rocket override)
 
 
 # --- ta.* helpers (matched to Pine semantics) -------------------------------
@@ -144,6 +147,8 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
 
     tb = trigger_bull.values
     ts = trigger_bear.values
+    rb = is_rocket_bull.values
+    rs = is_rocket_bear.values
     cu = cross_under.values
     co = cross_over.values
     ceb = ct_exhausted_bull.values
@@ -176,7 +181,7 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
             bull_hits = 0
         if not bear_state:
             bear_hits = 0
-        # 4) first-strike retest dot (barstate.isconfirmed is always true on closed bars)
+        # 4) retest + optional rocket expansion dots
         if not np.isnan(fast_v[i]):
             htf_ok_bull = (not p.require_htf_align) or (e20_v[i] > e50_v[i])
             htf_ok_bear = (not p.require_htf_align) or (e20_v[i] < e50_v[i])
@@ -190,12 +195,28 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
             else:
                 ang_ok_bull = ang_ok_bear = True
 
-            if bull_state and htf_ok_bull and ang_ok_bull and (low[i] <= fast_v[i]) and (close[i] >= slow_v[i]) and bull_hits < 1:
-                bull_dot[i] = True
-                bull_hits += 1
-            if bear_state and htf_ok_bear and ang_ok_bear and (high[i] >= fast_v[i]) and (close[i] <= slow_v[i]) and bear_hits < 1:
-                bear_dot[i] = True
-                bear_hits += 1
+            max_dots = max(1, p.max_retest_dots)
+            fired_bull = fired_bear = False
+
+            if bull_state and htf_ok_bull and ang_ok_bull and bull_hits < max_dots:
+                if (low[i] <= fast_v[i]) and (close[i] >= slow_v[i]):
+                    bull_dot[i] = True
+                    bull_hits += 1
+                    fired_bull = True
+                elif p.fire_rocket_dot and not fired_bull and rb[i]:
+                    bull_dot[i] = True
+                    bull_hits += 1
+                    fired_bull = True
+
+            if bear_state and htf_ok_bear and ang_ok_bear and bear_hits < max_dots:
+                if (high[i] >= fast_v[i]) and (close[i] <= slow_v[i]):
+                    bear_dot[i] = True
+                    bear_hits += 1
+                    fired_bear = True
+                elif p.fire_rocket_dot and not fired_bear and rs[i]:
+                    bear_dot[i] = True
+                    bear_hits += 1
+                    fired_bear = True
 
         bull_ign[i] = bull_state
         bear_ign[i] = bear_state
