@@ -1,4 +1,4 @@
-// FV Ribbon — AUDUSD (strategy_aud_nzd.pine — AUDUSD ONLY)
+// FV Ribbon — AUDUSD (strategy_aud.pine)
 // Optimizer peak: Sharpe 2.25 | PF 4.01 | EMA30/SMA80 | σ≥12° dir | RR 1:1.5
 // Layer 2: PMI=oecd, no-neutral enforced (server-side)
 // NZDUSD uses strategy_nzd.pine (different optimized params)
