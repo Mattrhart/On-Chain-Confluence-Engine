@@ -1,17 +1,17 @@
-// FV Ribbon — ETH (strategy_eth.pine)
-// Optimizer peak (730d 1H): Sharpe 1.82 | PF 1.65 | EMA10/SMA70 | σ≥12° | RR 1:3
-// Layer 2: PMI=ism, allow-neutral macro (server-side)
+// FV Ribbon — NZDUSD (strategy_nzd.pine)
+// Optimizer peak: Sharpe 1.82 | PF 1.90 | EMA15/SMA60 | σ≥7° dir | RR 1:1.5
+// Layer 2: PMI=oecd, no-neutral enforced (server-side)
 //@version=6
-indicator("FV Ribbon [ETH Opt]", shorttitle="FV ETH", overlay=true)
+indicator("FV Ribbon [NZD Opt]", shorttitle="FV NZD", overlay=true)
 
 const float MIN_SIGMA = 1e-10
 const float PI = 3.14159265359
 const int YZ_LEN = 20
 const int ANGLE_LB = 13
-const int MA1_LENGTH = 10
-const int MA2_LENGTH = 70
-const float ANGLE_THRESH = 12.0
-const float RR_TARGET = 3.0
+const int MA1_LENGTH = 15
+const int MA2_LENGTH = 60
+const float ANGLE_THRESH = 7.0
+const float RR_TARGET = 1.5
 const float ATR_SL_MULT = 1.5
 
 fast_ma = ta.ema(close, MA1_LENGTH)
@@ -74,8 +74,8 @@ sigma = math.max(math.sqrt(math.max(_sq, 0.0)), MIN_SIGMA)
 _logC = math.log(close)
 slopePB = (_logC - nz(_logC[ANGLE_LB])) / ANGLE_LB
 icsAngle = math.atan(slopePB / sigma) * 180.0 / PI
-ang_ok_bull = math.abs(icsAngle) >= ANGLE_THRESH
-ang_ok_bear = math.abs(icsAngle) >= ANGLE_THRESH
+ang_ok_bull = math.abs(icsAngle) >= ANGLE_THRESH and icsAngle > 0
+ang_ok_bear = math.abs(icsAngle) >= ANGLE_THRESH and icsAngle < 0
 
 var bool bull_ignited = false
 var bool bear_ignited = false
@@ -113,5 +113,5 @@ if barstate.isconfirmed
 plotshape(bull_dot, title="Long Retest", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
 plotshape(bear_dot, title="Short Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
-alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')

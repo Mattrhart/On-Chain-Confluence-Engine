@@ -35,7 +35,10 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
 
-from data_providers import _fetch_fred_series
+try:
+    from .data_providers import _fetch_fred_series
+except ImportError:
+    from data_providers import _fetch_fred_series
 
 
 @dataclass
@@ -47,16 +50,25 @@ class Pillar:
     lookback: int        # observations (months for monthly, days for daily)
     lag_days: int        # publication delay (no-lookahead)
     deadband: float = 0.0  # |momentum| <= deadband -> NEUTRAL (0)
+    series_b: str | None = None  # optional second series (ISM composite)
 
 
-PILLARS = [
-    Pillar("fomc",         "DFEDTARU",        3, "level_change_hold", 180, 2),
-    Pillar("cpi",          "CPIAUCSL",        2, "yoy_accel",           3, 45),
-    Pillar("yields",       "DGS10",           2, "level_change",       60, 1),
-    Pillar("nfp",          "PAYEMS",          2, "mom_vs_avg",         12, 35),
-    Pillar("pmi",          "BSCICP03USM665S", 2, "level_vs_100",        3, 30),
-    Pillar("retail_sales", "RSAFS",           1, "mom_pct",             1, 45),
-]
+def pillars_for(pmi_source: str = "oecd") -> list[Pillar]:
+    """Build pillar list with selectable PMI source."""
+    base = [
+        Pillar("fomc",         "DFEDTARU",        3, "level_change_hold", 180, 2),
+        Pillar("cpi",          "CPIAUCSL",        2, "yoy_accel",           3, 45),
+        Pillar("yields",       "DGS10",           2, "level_change",       60, 1),
+        Pillar("nfp",          "PAYEMS",          2, "mom_vs_avg",         12, 35),
+        Pillar("retail_sales", "RSAFS",           1, "mom_pct",             1, 45),
+    ]
+    if pmi_source == "ism":
+        # ISM PMI is not on the free fredgraph CSV; use manufacturing + services
+        # momentum proxies: IPMAN (mfg production index) + UMCSENT (consumer sentiment).
+        pmi = Pillar("pmi", "IPMAN", 2, "ism_composite_delta", 1, 30, series_b="UMCSENT")
+    else:
+        pmi = Pillar("pmi", "BSCICP03USM665S", 2, "level_vs_100", 3, 30)
+    return base[:4] + [pmi] + base[4:]
 
 # Human-readable status names (match your live engine's vocabulary)
 STATUS = {
@@ -97,6 +109,13 @@ def _momentum(raw: pd.Series, p: Pillar) -> pd.Series:
         return s.pct_change(p.lookback) * 100.0
     if p.transform == "level_vs_100":
         return s - 100.0
+    if p.transform == "ism_composite_delta":
+        # Raw MoM delta: manufacturing IP + consumer sentiment (services proxy)
+        b = _fetch_fred_series(p.series_b) if p.series_b else None
+        if b is not None:
+            b = b.reindex(s.index).ffill()
+            return s.diff(p.lookback) + b.diff(p.lookback)
+        return s.diff(p.lookback)
     raise ValueError(f"unknown transform {p.transform}")
 
 
@@ -122,12 +141,17 @@ def _score_pillar(p: Pillar) -> pd.DataFrame:
     return daily
 
 
-def build_macro_strength(pillars: list[Pillar] = PILLARS) -> pd.DataFrame:
+def build_macro_strength(pillars: list[Pillar] | None = None,
+                         pmi_source: str = "oecd") -> pd.DataFrame:
     """
     Returns a daily DataFrame with each pillar's score/status plus:
         usd_strength : int  (-12 .. +12)  — replicates calculate_usd_macro_bias()
         market_state : str  (Wrecking Ball / Collapse / Trending / Choppy-Neutral)
+
+    pmi_source: "oecd" (default) or "ism" (IPMAN+UMCSENT MoM delta composite)
     """
+    if pillars is None:
+        pillars = pillars_for(pmi_source)
     frames = []
     for p in pillars:
         try:
@@ -162,7 +186,7 @@ if __name__ == "__main__":
 
     latest = macro.dropna(subset=["usd_strength"]).iloc[-1]
     print("=== LIVE PILLAR READOUT (most recent, lag-adjusted) ===")
-    for p in PILLARS:
+    for p in pillars_for("oecd"):
         sc = latest.get(f"{p.name}_score", 0)
         stt = latest.get(f"{p.name}_status", "—")
         sign = f"+{sc}" if sc > 0 else str(sc)

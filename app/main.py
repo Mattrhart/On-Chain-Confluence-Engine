@@ -1,23 +1,23 @@
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Repo root on PYTHONPATH so `backtester.macro_pillars` resolves in production
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
+from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_macro_bias, cache_status
+from app.trading_config import macro_settings_for_ticker
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.3.0")
-
-# --- THE EXPANDED MACRO PEAD CACHE (The 6 Pillars) ---
-MACRO_CACHE = {
-    "fomc": {"status": "HAWKISH", "date": "June 17, 2026 (Rate Decision)"},
-    "cpi": {"status": "HOT", "date": "May 12, 2026 (Apr Data)"},       
-    "yields": {"status": "RISING", "date": "Live Treasury Feed"}, 
-    "nfp": {"status": "STRONG", "date": "June 5, 2026 (May Data)"},
-    "retail_sales": {"status": "STRONG", "date": "June 16, 2026"},
-    "pmi": {"status": "EXPANSION", "date": "June 3, 2026"}
-}
+app = FastAPI(title="Sovereign Confluence Engine", version="5.4.0")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -29,7 +29,6 @@ TECH_EARNINGS_CACHE = {
 }
 
 # --- NEXT MACRO EVENT COUNTDOWN TARGET ---
-# Target: July 14, 2026 at 12:30 UTC (US CPI Report)
 NEXT_MACRO_TARGET = datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc)
 
 # --- THE AUTO-ROUTING CORRELATION MATRIX ---
@@ -54,11 +53,12 @@ TOKEN_MAP = {
 }
 
 CURRENCY_KEYWORDS = {
-    "USD": [], "EUR": [], "GBP": [], "CHF": [], 
+    "USD": [], "EUR": [], "GBP": [], "CHF": [],
     "JPY": [], "AUD": [], "CAD": [], "NZD": []
 }
 
 INDEX_KEYWORDS = ["NDX", "NAS", "SPX", "US30", "DJI", "MNQ"]
+
 
 class TradingViewPayload(BaseModel):
     ticker: str
@@ -67,64 +67,21 @@ class TradingViewPayload(BaseModel):
     timeframe: str
     secret_token: str
 
+
+@app.on_event("startup")
+async def _startup_macro_cache():
+    """Warm the 6-pillar FRED cache before the first webhook."""
+    await warm_macro_cache()
+
+
 @app.get("/")
 async def root():
-    return {"status": "Engine V5.3.0 Active - Tri-Factor Matrix Engaged"}
+    status = cache_status()
+    return {
+        "status": "Engine V5.4.0 Active - Live 6-Pillar Macro Engaged",
+        "macro_cache": status,
+    }
 
-# --- OMNIPOTENT USD MACRO CALCULATOR ---
-def calculate_usd_macro_bias():
-    usd_strength = 0
-    reasons = []
-
-    if MACRO_CACHE["fomc"]["status"] == "HAWKISH":
-        usd_strength += 3
-        reasons.append(f"• <b>FOMC:</b> Hawkish Hold (+3) | <i>Rates locked at 3.50%-3.75%. Massive capital inflow to USD yield.</i>")
-    elif MACRO_CACHE["fomc"]["status"] == "DOVISH": 
-        usd_strength -= 3
-        reasons.append(f"• <b>FOMC:</b> Dovish Pivot (-3) | <i>Rate cuts incoming. Capital fleeing USD for risk assets.</i>")
-
-    if MACRO_CACHE["cpi"]["status"] == "HOT": 
-        usd_strength += 2
-        reasons.append(f"• <b>CPI:</b> Hot (+2) | <i>Inflation sticky. Forces Fed to maintain high terminal rates.</i>")
-    elif MACRO_CACHE["cpi"]["status"] == "COLD": 
-        usd_strength -= 2
-
-    if MACRO_CACHE["yields"]["status"] == "RISING":
-        usd_strength += 2
-        reasons.append(f"• <b>10Y Yield:</b> Rising (+2) | <i>Bond market pricing in structural 'Higher for Longer' reality.</i>")
-    elif MACRO_CACHE["yields"]["status"] == "FALLING": 
-        usd_strength -= 2
-        
-    if MACRO_CACHE["nfp"]["status"] == "STRONG":
-        usd_strength += 2
-        reasons.append(f"• <b>Labor:</b> Strong (+2) | <i>No recession panic. Gives Fed room to ignore aggressive cut demands.</i>")
-    elif MACRO_CACHE["nfp"]["status"] == "WEAK": 
-        usd_strength -= 2
-
-    if MACRO_CACHE["pmi"]["status"] == "EXPANSION":
-        usd_strength += 2
-        reasons.append(f"• <b>Services PMI:</b> >50 Expansion (+2) | <i>Service economy booming, compounding structural USD demand.</i>")
-    elif MACRO_CACHE["pmi"]["status"] == "CONTRACTION": 
-        usd_strength -= 2
-
-    if MACRO_CACHE["retail_sales"]["status"] == "STRONG":
-        usd_strength += 1
-        reasons.append(f"• <b>Retail Sales:</b> Strong (+1) | <i>Consumer spending accelerates. Highly resilient economy.</i>")
-    elif MACRO_CACHE["retail_sales"]["status"] == "WEAK": 
-        usd_strength -= 1
-
-    state_summary = ""
-    if usd_strength >= 8:
-        state_summary = "\n🔥 <b>MARKET STATE: Wrecking Ball</b>\n<i>The USD is universally dominant. Risk assets (Crypto/FX Crosses) will face severe, sustained downward pressure.</i>"
-    elif usd_strength <= -8:
-        state_summary = "\n🩸 <b>MARKET STATE: USD Collapse</b>\n<i>The USD is in freefall. Massive liquidity rotation into high-beta risk assets (Crypto/Equities) underway.</i>"
-    elif -3 <= usd_strength <= 3:
-        state_summary = "\n⚖️ <b>MARKET STATE: Choppy / Neutral</b>\n<i>Macro data is conflicting. Asset prices will be driven entirely by local technicals and isolated order flow.</i>"
-    else:
-        state_summary = f"\n📉 <b>MARKET STATE: Trending Bias</b>\n<i>Moderate, structured directional bias established.</i>"
-
-    reasons.append(state_summary)
-    return usd_strength, reasons
 
 # --- TECH PEAD CALCULATOR ---
 def calculate_tech_pead_bias():
@@ -134,7 +91,7 @@ def calculate_tech_pead_bias():
 
     for ticker, data in TECH_EARNINGS_CACHE.items():
         pead_score += data["weight"]
-        
+
         if data["weight"] > 0:
             reasons.append(f"• <b>{ticker} Earnings:</b> {data['surprise']} (+{data['weight']}) | <i>Guidance: {data['guidance']}</i>")
         elif data["weight"] < 0:
@@ -151,19 +108,36 @@ def calculate_tech_pead_bias():
     reasons.append(state_summary)
     return pead_score, reasons
 
+
+def _macro_decision(direction: str, macro_bias: int, require_non_neutral: bool) -> tuple[str, str, str]:
+    """Return (decision, stars, reason_line) from directional macro bias."""
+    if require_non_neutral and macro_bias == 0:
+        return "ABORT", "⚠️", "\n🛑 <b>Decision:</b> ABORT. No-neutral policy — macro bias is flat (0)."
+    if direction == "LONG" and macro_bias > 0:
+        return "EXECUTE", "⭐⭐⭐⭐⭐", "\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with LONG setup."
+    if direction == "SHORT" and macro_bias < 0:
+        return "EXECUTE", "⭐⭐⭐⭐⭐", "\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with SHORT setup."
+    if macro_bias == 0:
+        return "EXECUTE", "⭐⭐⭐", "\n✅ <b>Decision:</b> PROCEED. Macro environment flat. Authorized on technicals."
+    return "ABORT", "⚠️", "\n🛑 <b>Decision:</b> ABORT. Technical direction fights established macro trend."
+
+
 # --- THE BACKGROUND WORKER (Heavy Lifting) ---
 async def process_tradingview_signal(payload: TradingViewPayload):
+    await ensure_macro_fresh()
+
     raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
     is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
     is_index = any(keyword in raw_ticker for keyword in INDEX_KEYWORDS)
-    
+
     raw_dir = payload.direction.upper()
     direction = "LONG" if raw_dir in ["BUY", "LONG"] else "SHORT"
     dir_label = direction
     decision, stars, reasoning, metric_display = "EXECUTE", "⭐⭐⭐", "", "Processing Matrix..."
 
-    usd_strength, macro_reasons = calculate_usd_macro_bias()
-    
+    macro_cfg = macro_settings_for_ticker(raw_ticker)
+    usd_strength, macro_reasons = calculate_usd_macro_bias(pmi_source=macro_cfg["pmi_source"])
+
     narrative_points = [p for p in macro_reasons if not p.startswith("\n")]
     state_summary_block = [p for p in macro_reasons if p.startswith("\n")]
     state_summary = state_summary_block[0] if state_summary_block else ""
@@ -171,16 +145,16 @@ async def process_tradingview_signal(payload: TradingViewPayload):
     if is_index:
         symbol = raw_ticker
         sector = "Global Indices | Tech Heavy"
-        
+
         pead_score, pead_reasons = calculate_tech_pead_bias()
         reasons = [p for p in pead_reasons if not p.startswith("\n")]
         index_state_summary = [p for p in pead_reasons if p.startswith("\n")][0]
-        
+
         reasons.append("\n🌍 <b>MACRO OVERLAY (Yield Pressure):</b>")
         reasons.extend(narrative_points)
-        
-        index_bias = pead_score - (usd_strength * 0.5) 
-        
+
+        index_bias = pead_score - (usd_strength * 0.5)
+
         if direction == "LONG" and index_bias > 0:
             decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
             reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Earnings PEAD supports LONG drift.")
@@ -188,8 +162,8 @@ async def process_tradingview_signal(payload: TradingViewPayload):
             decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
             reasons.append(f"\n✅ <b>Decision:</b> PROCEED. Earnings PEAD supports SHORT drift.")
         elif index_bias == 0:
-             decision, stars = "EXECUTE", "⭐⭐⭐"
-             reasons.append("\n✅ <b>Decision:</b> PROCEED. PEAD is flat. Authorized on technicals.")
+            decision, stars = "EXECUTE", "⭐⭐⭐"
+            reasons.append("\n✅ <b>Decision:</b> PROCEED. PEAD is flat. Authorized on technicals.")
         else:
             decision, stars = "ABORT", "⚠️"
             reasons.append("\n🛑 <b>Decision:</b> ABORT. Technical direction fights established Earnings PEAD.")
@@ -202,10 +176,10 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         base_ccy, quote_ccy = raw_ticker[:3], raw_ticker[3:]
         symbol = f"{base_ccy}_{quote_ccy}"
         sector = f"Global FX | {base_ccy}-{quote_ccy} Cross"
-        
+
         reasons = narrative_points.copy()
         macro_bias_for_pair = 0
-        
+
         if quote_ccy == "USD":
             macro_bias_for_pair = -usd_strength
             reasons.append(f"\n• <b>Topology:</b> USD is Quote. Pair trend inverted (Bias: {macro_bias_for_pair}).")
@@ -215,23 +189,14 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         else:
             reasons.append("\n• <b>Topology:</b> Non-USD Cross. Evaluating on pure technicals.")
 
-        if direction == "LONG" and macro_bias_for_pair > 0:
-            decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
-            reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with LONG setup.")
-        elif direction == "SHORT" and macro_bias_for_pair < 0:
-            decision, stars = "EXECUTE", "⭐⭐⭐⭐⭐"
-            reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro framework aligned with SHORT setup.")
-        elif macro_bias_for_pair == 0:
-             decision, stars = "EXECUTE", "⭐⭐⭐"
-             reasons.append("\n✅ <b>Decision:</b> PROCEED. Macro environment flat. Authorized on technicals.")
-        else:
-            decision, stars = "ABORT", "⚠️"
-            reasons.append("\n🛑 <b>Decision:</b> ABORT. Technical direction fights established macro trend.")
+        decision, stars, line = _macro_decision(
+            direction, macro_bias_for_pair, macro_cfg["require_non_neutral"])
+        reasons.append(line)
 
         if state_summary:
             reasons.append(state_summary)
 
-        metric_display = f"USD PEAD: {usd_strength}"
+        metric_display = f"USD PEAD: {usd_strength} | PMI: {macro_cfg['pmi_source']}"
         reasoning = "\n".join(reasons)
 
     else:
@@ -240,7 +205,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
             if lookup_key.endswith(stable) and lookup_key != stable:
                 lookup_key = lookup_key[:-len(stable)]
                 break
-        
+
         symbol = CRYPTO_CLEAN_MAP.get(lookup_key, lookup_key)
         token_info = TOKEN_MAP.get(symbol)
 
@@ -249,7 +214,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
             return
 
         sector = token_info.get("sector")
-        
+
         metrics = await fetch_full_intelligence(symbol=symbol, address=token_info.get("address"), chain=token_info.get("chain"))
         if not metrics:
             metrics = {"net_flow_24h": 0, "cex_netflow": 0, "perp_bias": "NEUTRAL"}
@@ -272,10 +237,13 @@ async def process_tradingview_signal(payload: TradingViewPayload):
 
         reasons.append("\n🌍 <b>MACRO OVERLAY (USD INVERSE CORRELATION):</b>")
         reasons.extend(narrative_points)
-        
-        crypto_macro_bias = -usd_strength 
-        
-        if direction == "LONG" and crypto_macro_bias > 0:
+
+        crypto_macro_bias = -usd_strength
+
+        if macro_cfg["require_non_neutral"] and crypto_macro_bias == 0:
+            confluence_score -= 3
+            reasons.append("\n• <b>Macro Alignment:</b> ⚠️ No-neutral policy — flat USD macro (-3)")
+        elif direction == "LONG" and crypto_macro_bias > 0:
             confluence_score += 3
             reasons.append(f"\n• <b>Macro Alignment:</b> USD Weakness Supports Crypto LONG (+3)")
         elif direction == "SHORT" and crypto_macro_bias < 0:
@@ -293,26 +261,28 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         else:
             decision, stars = "ABORT", "⚠️"
             reasons.append(f"\n🛑 <b>Decision:</b> ABORT. Insufficient confluence threshold to support technicals.")
-            
+
         reasons.append(f"📊 <b>Confluence Score: {confluence_score}/6</b>")
-        
+
         if state_summary:
             reasons.append(state_summary)
-            
+
         reasoning = "\n".join(reasons)
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
-    
+
     now = datetime.now(timezone.utc)
     sync_time_str = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-    
+    cache = cache_status()
+    macro_sync = cache.get("fetched_at") or sync_time_str
+
     if now < NEXT_MACRO_TARGET:
         delta = NEXT_MACRO_TARGET - now
         hours_left = delta.seconds // 3600
         countdown = f"{delta.days}d {hours_left}h"
     else:
         countdown = "DATA REFRESH REQUIRED"
-    
+
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} <b>DECISION: {decision} ({dir_label})</b>\n"
         f"━━━━━━━━━━━━━━━\n"
@@ -326,16 +296,18 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
-        f"⏳ <b>Next Macro Update:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.3.0</i>"
+        f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
+        f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
+        f"📈 <i>Confluence Engine V5.4.0</i>"
     )
 
     await send_telegram_notification(rich_message)
 
+
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
 async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
-    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"): 
+    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"):
         raise HTTPException(status_code=401)
 
     background_tasks.add_task(process_tradingview_signal, payload)

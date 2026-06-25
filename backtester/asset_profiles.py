@@ -34,12 +34,13 @@ ASSET_PROFILES: dict[str, tuple[str, RibbonParams]] = {
     "AUDUSD=X": ("sigma_ang_dir", PROFILE_SIGMA_ANG_DIR),
     "NZDUSD=X": ("sigma_ang_dir", PROFILE_SIGMA_ANG_DIR),
     "USDJPY=X": ("chop_strong",   PROFILE_CHOP_STRONG),
+    "USDCHF=X": ("sigma_ang_dir", PROFILE_SIGMA_ANG_DIR),
 }
 
 DEFAULT_PROFILE = ("baseline", PROFILE_BASELINE)
 
-# Final experiment universe (user's profitable assets)
-FINAL_UNIVERSE = ["ETH-USD", "AUDUSD=X", "NZDUSD=X", "USDJPY=X"]
+# Final experiment universe (user's profitable assets + expansion)
+FINAL_UNIVERSE = ["ETH-USD", "AUDUSD=X", "NZDUSD=X", "USDJPY=X", "USDCHF=X"]
 
 
 def normalize_symbol(pair: str) -> str:

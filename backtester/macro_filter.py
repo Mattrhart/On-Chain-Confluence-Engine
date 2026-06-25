@@ -75,6 +75,6 @@ def align_strength_to_signals(signal_index: pd.DatetimeIndex,
     return merged["usd_strength"].reindex(signal_index).fillna(0).astype(int)
 
 
-def load_macro_strength() -> pd.DataFrame:
+def load_macro_strength(pmi_source: str = "oecd") -> pd.DataFrame:
     """Fetch/build the full 6-pillar daily macro frame."""
-    return build_macro_strength()
+    return build_macro_strength(pmi_source=pmi_source)

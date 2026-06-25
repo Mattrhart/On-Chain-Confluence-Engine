@@ -137,11 +137,13 @@ def run_backtest(df: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # METRICS
 # ---------------------------------------------------------------------------
-def compute_metrics(trades: list[Trade], risk_per_trade: float = 0.01) -> dict:
+def compute_metrics(trades: list[Trade], risk_per_trade: float = 0.01,
+                    bars_per_year: float = 8760.0) -> dict:
+    empty = {"trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "expectancy_R": 0.0,
+             "total_R": 0.0, "max_drawdown_pct": 0.0, "return_pct": 0.0,
+             "avg_win_R": 0.0, "avg_loss_R": 0.0, "sharpe_ratio": 0.0}
     if not trades:
-        return {"trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "expectancy_R": 0.0,
-                "total_R": 0.0, "max_drawdown_pct": 0.0, "return_pct": 0.0,
-                "avg_win_R": 0.0, "avg_loss_R": 0.0}
+        return empty
 
     r = np.array([t.r_multiple for t in trades])
     wins = r[r > 0]
@@ -155,6 +157,15 @@ def compute_metrics(trades: list[Trade], risk_per_trade: float = 0.01) -> dict:
     drawdown = (equity - peak) / peak
     max_dd = drawdown.min() if len(drawdown) else 0.0
 
+    # Annualized Sharpe from per-trade R-multiples
+    std_r = r.std(ddof=1) if len(r) > 1 else 0.0
+    span_days = max((trades[-1].exit_time - trades[0].entry_time).days, 1)
+    trades_per_year = len(r) / span_days * 365.25
+    if std_r > 0 and trades_per_year > 0:
+        sharpe = (r.mean() / std_r) * np.sqrt(trades_per_year)
+    else:
+        sharpe = 0.0 if r.mean() <= 0 else float("inf")
+
     return {
         "trades": len(trades),
         "win_rate": round(100.0 * len(wins) / len(r), 1),
@@ -165,4 +176,5 @@ def compute_metrics(trades: list[Trade], risk_per_trade: float = 0.01) -> dict:
         "avg_loss_R": round(losses.mean(), 2) if len(losses) else 0.0,
         "max_drawdown_pct": round(100.0 * max_dd, 2),
         "return_pct": round(100.0 * (equity[-1] - 1.0), 2),
+        "sharpe_ratio": round(float(sharpe), 3) if np.isfinite(sharpe) else sharpe,
     }

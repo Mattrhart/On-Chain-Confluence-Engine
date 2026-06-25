@@ -1,23 +1,26 @@
 // FV Ribbon — USDJPY (strategy_jpy.pine)
-// Deploy on: USDJPY. Gate: chop_strong (req_gap=1.0, min_slope=0.06).
+// Optimizer peak: Sharpe 1.22 | PF 1.52 | EMA25/SMA50 | chop_strong | RR 1:3
+// Layer 2: PMI=ism, allow-neutral macro (server-side)
 //@version=6
-indicator("FV Ribbon [JPY Chop+]", shorttitle="FV JPY", overlay=true)
+indicator("FV Ribbon [JPY Opt]", shorttitle="FV JPY", overlay=true)
 
-ma1_length = input.int(20, "Fast EMA Length")
-ma2_length = input.int(50, "Slow SMA Length")
-fast_ma = ta.ema(close, ma1_length)
-slow_ma = ta.sma(close, ma2_length)
+const int MA1_LENGTH = 25
+const int MA2_LENGTH = 50
+const float RR_TARGET = 3.0
+const float ATR_SL_MULT = 1.5
+
+fast_ma = ta.ema(close, MA1_LENGTH)
+slow_ma = ta.sma(close, MA2_LENGTH)
 
 ema20_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_on)
 ema50_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_on)
 
 dist_pct = math.abs(ema20_4h - ema50_4h) / ema50_4h * 100
-prox_input = input.float(0.25, "Early Crossover Proximity (%)", step=0.05)
+prox_input = 0.25
 allow_long = (ema20_4h > ema50_4h) or ((ema20_4h < ema50_4h) and (dist_pct <= prox_input) and (fast_ma > slow_ma))
 allow_short = (ema20_4h < ema50_4h) or ((ema20_4h > ema50_4h) and (dist_pct <= prox_input) and (fast_ma < slow_ma))
 bgcolor(allow_long ? color.new(#089981, 92) : allow_short ? color.new(#f23645, 92) : na)
 
-// HARDCODED chop_strong gate
 min_slope = 0.06
 bull_slope = (slow_ma - nz(slow_ma[5])) / nz(slow_ma[5]) * 100
 bear_slope = (nz(slow_ma[5]) - slow_ma) / nz(slow_ma[5]) * 100
@@ -26,8 +29,8 @@ is_choppy_bear = bear_slope < min_slope
 
 macro_atr = ta.atr(100)
 safe_atr = math.max(macro_atr, 0.0001)
-thrust_lookback = input.int(3, "Price Thrust Lookback (Bars)")
-thrust_req = input.float(1.5, "Vertical Price Thrust Req (ATR)", step=0.1)
+thrust_lookback = 3
+thrust_req = 1.5
 price_thrust_bull = (close - nz(close[thrust_lookback])) / safe_atr
 price_thrust_bear = (nz(close[thrust_lookback]) - close) / safe_atr
 is_rocket_bull = (fast_ma > slow_ma) and (price_thrust_bull >= thrust_req)
@@ -40,7 +43,7 @@ pure_bg_bull = ema20_4h > ema50_4h
 pure_bg_bear = ema20_4h < ema50_4h
 is_ct_bull = pure_bg_bear
 is_ct_bear = pure_bg_bull
-ct_max_bars = input.int(16, "Counter-Trend Max Duration (Bars)")
+ct_max_bars = 16
 bars_bull = ta.barssince(ta.crossover(fast_ma, slow_ma))
 bars_bear = ta.barssince(ta.crossunder(fast_ma, slow_ma))
 ct_exhausted_bull = is_ct_bull and (bars_bull >= ct_max_bars)
@@ -63,8 +66,8 @@ if (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or ct_exhausted_bear
     bear_ignited := false
 
 color ribbon_color = bull_ignited ? color.new(#089981, 75) : bear_ignited ? color.new(#f23645, 75) : color.new(color.gray, 90)
-p1 = plot(fast_ma, "Fast 20 EMA", color=bull_ignited or bear_ignited ? #f6c309 : color.gray, linewidth=2)
-p2 = plot(slow_ma, "Slow 50 SMA", color=bull_ignited or bear_ignited ? #fb9800 : color.gray, linewidth=2)
+p1 = plot(fast_ma, "Fast EMA", color=bull_ignited or bear_ignited ? #f6c309 : color.gray, linewidth=2)
+p2 = plot(slow_ma, "Slow SMA", color=bull_ignited or bear_ignited ? #fb9800 : color.gray, linewidth=2)
 fill(p1, p2, color=ribbon_color)
 
 var int bull_hits = 0
@@ -87,5 +90,5 @@ if barstate.isconfirmed
 plotshape(bull_dot, title="Long Retest", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
 plotshape(bear_dot, title="Short Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","secret_token":"YOUR_SECRET"}')
-alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","secret_token":"YOUR_SECRET"}')
+alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
