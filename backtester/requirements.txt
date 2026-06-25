@@ -1,0 +1,8 @@
+# FV Ribbon Backtester — Python dependencies
+# Install:  pip install -r requirements.txt
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.40      # free price data (Forex via "GBPUSD=X", crypto via "BTC-USD")
+requests>=2.31.0      # FRED macro pulls (fredgraph CSV — no API key required)
+python-dotenv>=1.0.0  # optional .env loading
+tabulate>=0.9.0       # pretty comparison tables in the terminal
