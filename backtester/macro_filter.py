@@ -1,91 +1,80 @@
 """
-macro_filter.py — Layer 2 "Analysis Brief" (the Weight of the Dollar).
+macro_filter.py — Layer 2 "Analysis Brief" (6-pillar USD macro engine).
 
-Turns the hardcoded MACRO_CACHE concept into a DATA-DRIVEN, no-lookahead filter.
+Uses macro_pillars.build_macro_strength() — the same scoring contract as your live
+main.py calculate_usd_macro_bias() (-12 .. +12), NOT the simplified DXY proxy.
 
-Thesis being tested:
-  A Layer 1 technical signal only has a true edge when it aligns with the
-  structural USD regime. For USD-quote pairs (GBPUSD, AUDUSD, EURUSD...):
-      strong/rising USD  -> pair pressured DOWN -> only SHORTs allowed
-      weak/falling USD   -> pair supported UP   -> only LONGs allowed
-      neutral            -> defer to technicals (configurable)
+Forex topology (matches main.py):
+    XXXUSD  -> macro_bias_for_pair = -usd_strength
+    USDXXX  -> macro_bias_for_pair = +usd_strength
+Crypto (ETH, etc.):
+    macro_bias = -usd_strength  (USD inverse correlation)
 
-USD regime score is built from:
-  - DXY (broad dollar index) trend over `lookback` days
-  - 10Y Treasury yield trend over `lookback` days
-Each contributes +1 (rising) or -1 (falling); summed and thresholded.
+EXECUTE when direction aligns with macro_bias_for_pair; allow when bias == 0 if
+allow_neutral is True (same as main.py flat macro branch).
 """
 
 from __future__ import annotations
 import pandas as pd
-import numpy as np
 from dataclasses import dataclass
+
+from macro_pillars import build_macro_strength
+
+CRYPTO_PREFIXES = ("ETH", "BTC", "SOL", "BNB", "HYPE", "LINK", "PEPE", "AERO", "LDO", "WBTC")
 
 
 @dataclass
 class MacroParams:
-    lookback_days: int = 20    # trend window for DXY / yields
-    allow_neutral: bool = True # in filtered mode, let technicals pass when USD is neutral
+    allow_neutral: bool = True
 
 
-def compute_usd_bias(macro: pd.DataFrame, p: MacroParams = MacroParams()) -> pd.DataFrame:
+def normalize_pair(pair: str) -> str:
+    return pair.upper().replace("=X", "").replace("/", "").replace("-", "").replace(" ", "")
+
+
+def macro_bias_for_pair(pair: str, usd_strength: int) -> int:
     """
-    macro: daily frame with columns dxy, y10 (y2 optional).
-    Returns daily frame with an integer `usd_bias` in {-1, 0, +1}
-    (+1 = structurally strong USD, -1 = weak USD).
+    Translate 6-pillar usd_strength into directional bias for this asset.
+    Positive => favours LONG, negative => favours SHORT, 0 => neutral pass-through.
     """
-    m = macro.copy()
-    dxy_up = m["dxy"] > m["dxy"].shift(p.lookback_days)
-    y10_up = m["y10"] > m["y10"].shift(p.lookback_days)
-
-    score = (dxy_up.astype(int) - (~dxy_up).astype(int)) \
-          + (y10_up.astype(int) - (~y10_up).astype(int))   # range: -2 .. +2
-
-    usd_bias = pd.Series(0, index=m.index, dtype=int)
-    usd_bias[score > 0] = 1
-    usd_bias[score < 0] = -1
-
-    out = pd.DataFrame({"usd_bias": usd_bias, "macro_score": score})
-    # invalidate the warmup window (shift introduced NaNs -> treat as neutral 0)
-    out.loc[m["dxy"].shift(p.lookback_days).isna(), ["usd_bias", "macro_score"]] = 0
-    return out
+    sym = normalize_pair(pair)
+    if sym.endswith("USD"):
+        return -usd_strength
+    if sym.startswith("USD"):
+        return usd_strength
+    if any(sym.startswith(p) or sym.startswith(p + "USD") or sym.startswith(p + "USDT")
+           for p in CRYPTO_PREFIXES):
+        return -usd_strength
+    return 0
 
 
-def align_bias_to_signals(signal_index: pd.DatetimeIndex,
-                          usd_bias: pd.DataFrame) -> pd.Series:
-    """
-    Attach each (intraday) signal bar to the most recent daily USD bias
-    available on or before it. merge_asof backward => strictly no lookahead.
-    """
-    left = pd.DataFrame({"ts": pd.DatetimeIndex(signal_index).astype("datetime64[ns]")})
-    left = left.sort_values("ts")
-    right = usd_bias.reset_index()
-    right.columns = ["ts"] + list(right.columns[1:])
-    right["ts"] = pd.to_datetime(right["ts"]).astype("datetime64[ns]")
-    right = right.sort_values("ts")
-    merged = pd.merge_asof(left, right, on="ts", direction="backward")
-    merged = merged.set_index("ts")
-    return merged["usd_bias"].reindex(signal_index).fillna(0).astype(int)
-
-
-def pair_directional_bias(pair: str, usd_bias: int) -> int:
-    """
-    Translate USD regime into an allowed direction for a specific pair.
-    +1 => favours LONG, -1 => favours SHORT, 0 => neutral.
-    """
-    sym = pair.upper().replace("=X", "").replace("/", "").replace("-", "")
-    if sym.endswith("USD"):      # e.g. GBPUSD, AUDUSD, EURUSD -> USD is the quote
-        return -usd_bias
-    if sym.startswith("USD"):    # e.g. USDJPY, USDCAD -> USD is the base
-        return usd_bias
-    return 0                     # non-USD cross -> macro filter abstains
-
-
-def trade_allowed(pair: str, direction: str, usd_bias: int, p: MacroParams) -> bool:
-    """direction: 'LONG' or 'SHORT'. Returns True if the macro brief permits it."""
-    bias = pair_directional_bias(pair, usd_bias)
+def trade_allowed(pair: str, direction: str, usd_strength: int, p: MacroParams) -> bool:
+    """Replicates main.py forex/crypto EXECUTE vs ABORT decision."""
+    bias = macro_bias_for_pair(pair, usd_strength)
     if bias == 0:
         return p.allow_neutral
     if direction == "LONG":
         return bias > 0
     return bias < 0
+
+
+def align_strength_to_signals(signal_index: pd.DatetimeIndex,
+                              macro: pd.DataFrame) -> pd.Series:
+    """
+    Attach each intraday bar to the most recent daily usd_strength (no lookahead).
+    """
+    left = pd.DataFrame({"ts": pd.DatetimeIndex(signal_index).astype("datetime64[ns]")})
+    left = left.sort_values("ts")
+    right = macro[["usd_strength"]].copy()
+    right.index.name = "ts"
+    right = right.reset_index()
+    right["ts"] = pd.to_datetime(right["ts"]).astype("datetime64[ns]")
+    right = right.sort_values("ts")
+    merged = pd.merge_asof(left, right, on="ts", direction="backward")
+    merged = merged.set_index("ts")
+    return merged["usd_strength"].reindex(signal_index).fillna(0).astype(int)
+
+
+def load_macro_strength() -> pd.DataFrame:
+    """Fetch/build the full 6-pillar daily macro frame."""
+    return build_macro_strength()

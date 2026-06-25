@@ -39,7 +39,7 @@ def main():
         px = dp.attach_htf_shield(px, htf_rule=HTF)
         for name, rp in CONFIGS.items():
             sig = compute_signals(px, rp)
-            trades = run_backtest(sig, pair, RISK, usd_bias_series=None)
+            trades = run_backtest(sig, pair, RISK, usd_strength_series=None)
             m = compute_metrics(trades, RISK.risk_per_trade)
             rows.append({"pair": pair, "config": name, "trades": m["trades"],
                          "win%": m["win_rate"], "PF": m["profit_factor"],

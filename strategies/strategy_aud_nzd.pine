@@ -1,0 +1,113 @@
+// FV Ribbon — AUD / NZD (strategy_aud_nzd.pine)
+// Deploy on: AUDUSD, NZDUSD. Gate: sigma_ang_dir (|angle| >= 10° AND sign matches trade).
+//@version=6
+indicator("FV Ribbon [AUD/NZD σ-dir]", shorttitle="FV AUDNZD", overlay=true)
+
+const float MIN_SIGMA = 1e-10
+const int YZ_LEN = 20
+const int ANGLE_LB = 13
+const float ANGLE_THRESH = 10.0
+
+ma1_length = input.int(20, "Fast EMA Length")
+ma2_length = input.int(50, "Slow SMA Length")
+fast_ma = ta.ema(close, ma1_length)
+slow_ma = ta.sma(close, ma2_length)
+
+ema20_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_on)
+ema50_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+dist_pct = math.abs(ema20_4h - ema50_4h) / ema50_4h * 100
+prox_input = input.float(0.25, "Early Crossover Proximity (%)", step=0.05)
+allow_long = (ema20_4h > ema50_4h) or ((ema20_4h < ema50_4h) and (dist_pct <= prox_input) and (fast_ma > slow_ma))
+allow_short = (ema20_4h < ema50_4h) or ((ema20_4h > ema50_4h) and (dist_pct <= prox_input) and (fast_ma < slow_ma))
+bgcolor(allow_long ? color.new(#089981, 92) : allow_short ? color.new(#f23645, 92) : na)
+
+min_slope = input.float(0.03, "Min 50 SMA Slope (%)", step=0.01)
+bull_slope = (slow_ma - nz(slow_ma[5])) / nz(slow_ma[5]) * 100
+bear_slope = (nz(slow_ma[5]) - slow_ma) / nz(slow_ma[5]) * 100
+is_choppy_bull = bull_slope < min_slope
+is_choppy_bear = bear_slope < min_slope
+
+macro_atr = ta.atr(100)
+safe_atr = math.max(macro_atr, 0.0001)
+thrust_lookback = input.int(3, "Price Thrust Lookback (Bars)")
+thrust_req = input.float(1.5, "Vertical Price Thrust Req (ATR)", step=0.1)
+price_thrust_bull = (close - nz(close[thrust_lookback])) / safe_atr
+price_thrust_bear = (nz(close[thrust_lookback]) - close) / safe_atr
+is_rocket_bull = (fast_ma > slow_ma) and (price_thrust_bull >= thrust_req)
+is_rocket_bear = (fast_ma < slow_ma) and (price_thrust_bear >= thrust_req)
+
+gap_atr = math.abs(fast_ma - slow_ma) / safe_atr
+req_gap = input.float(0.5, "Required Gap (Macro ATR)", step=0.1)
+
+pure_bg_bull = ema20_4h > ema50_4h
+pure_bg_bear = ema20_4h < ema50_4h
+is_ct_bull = pure_bg_bear
+is_ct_bear = pure_bg_bull
+ct_max_bars = input.int(16, "Counter-Trend Max Duration (Bars)")
+bars_bull = ta.barssince(ta.crossover(fast_ma, slow_ma))
+bars_bear = ta.barssince(ta.crossunder(fast_ma, slow_ma))
+ct_exhausted_bull = is_ct_bull and (bars_bull >= ct_max_bars)
+ct_exhausted_bear = is_ct_bear and (bars_bear >= ct_max_bars)
+
+std_bull = (fast_ma > slow_ma) and (gap_atr >= req_gap) and not is_choppy_bull
+std_bear = (fast_ma < slow_ma) and (gap_atr >= req_gap) and not is_choppy_bear
+trigger_bull = (std_bull or is_rocket_bull) and not ct_exhausted_bull
+trigger_bear = (std_bear or is_rocket_bear) and not ct_exhausted_bear
+
+_yzOR = math.log(open / nz(close[1], open))
+_yzCO = math.log(close / open)
+_yzHO = math.log(high / open)
+_yzHC = math.log(high / close)
+_yzLO = math.log(low / open)
+_yzLC = math.log(low / close)
+_sqOR = ta.variance(_yzOR, YZ_LEN)
+_sqCO = ta.variance(_yzCO, YZ_LEN)
+_sqRS = ta.sma(_yzHO * _yzHC + _yzLO * _yzLC, YZ_LEN)
+_k = 0.34 / (1.34 + (YZ_LEN + 1.0) / math.max(YZ_LEN - 1.0, 1.0))
+_sq = nz(_sqOR) + _k * nz(_sqCO) + (1.0 - _k) * nz(_sqRS)
+sigma = math.max(math.sqrt(math.max(_sq, 0.0)), MIN_SIGMA)
+_logC = math.log(close)
+slopePB = (_logC - nz(_logC[ANGLE_LB])) / ANGLE_LB
+icsAngle = math.atan(slopePB / sigma) * 180.0 / PI
+ang_ok_bull = math.abs(icsAngle) >= ANGLE_THRESH and icsAngle > 0
+ang_ok_bear = math.abs(icsAngle) >= ANGLE_THRESH and icsAngle < 0
+
+var bool bull_ignited = false
+var bool bear_ignited = false
+if trigger_bull
+    bull_ignited := true
+if trigger_bear
+    bear_ignited := true
+if (close < slow_ma) or ta.crossunder(fast_ma, slow_ma) or ct_exhausted_bull
+    bull_ignited := false
+if (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or ct_exhausted_bear
+    bear_ignited := false
+
+color ribbon_color = bull_ignited ? color.new(#089981, 75) : bear_ignited ? color.new(#f23645, 75) : color.new(color.gray, 90)
+p1 = plot(fast_ma, "Fast 20 EMA", color=bull_ignited or bear_ignited ? #f6c309 : color.gray, linewidth=2)
+p2 = plot(slow_ma, "Slow 50 SMA", color=bull_ignited or bear_ignited ? #fb9800 : color.gray, linewidth=2)
+fill(p1, p2, color=ribbon_color)
+
+var int bull_hits = 0
+var int bear_hits = 0
+if not bull_ignited
+    bull_hits := 0
+if not bear_ignited
+    bear_hits := 0
+
+bull_dot = false
+bear_dot = false
+if barstate.isconfirmed
+    if bull_ignited and ang_ok_bull and (low <= fast_ma) and (close >= slow_ma) and bull_hits < 1
+        bull_dot := true
+        bull_hits += 1
+    if bear_ignited and ang_ok_bear and (high >= fast_ma) and (close <= slow_ma) and bear_hits < 1
+        bear_dot := true
+        bear_hits += 1
+
+plotshape(bull_dot, title="Long Retest", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
+plotshape(bear_dot, title="Short Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
+
+alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","secret_token":"YOUR_SECRET"}')

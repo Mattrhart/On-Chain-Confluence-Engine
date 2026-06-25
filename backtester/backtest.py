@@ -45,12 +45,12 @@ class Trade:
 def run_backtest(df: pd.DataFrame,
                  pair: str,
                  risk: RiskParams = RiskParams(),
-                 usd_bias_series: pd.Series | None = None,
+                 usd_strength_series: pd.Series | None = None,
                  macro_p: MacroParams = MacroParams()) -> list[Trade]:
     """
     df must contain: high, low, close, bull_dot, bear_dot, bull_ignited,
                      bear_ignited, risk_atr.
-    If usd_bias_series is provided, the Layer 2 macro filter is applied.
+    If usd_strength_series is provided, the 6-pillar Layer 2 macro filter is applied.
     """
     idx = df.index
     high = df["high"].values
@@ -62,8 +62,8 @@ def run_backtest(df: pd.DataFrame,
     bear_dot = df["bear_dot"].values
     atr = df["risk_atr"].values
 
-    bias = (usd_bias_series.reindex(idx).fillna(0).astype(int).values
-            if usd_bias_series is not None else None)
+    strength = (usd_strength_series.reindex(idx).fillna(0).astype(int).values
+                if usd_strength_series is not None else None)
 
     trades: list[Trade] = []
     n = len(df)
@@ -80,8 +80,8 @@ def run_backtest(df: pd.DataFrame,
 
         direction = "LONG" if want_long else "SHORT"
 
-        # Layer 2 macro gate
-        if bias is not None and not trade_allowed(pair, direction, int(bias[i]), macro_p):
+        # Layer 2 macro gate (6-pillar usd_strength)
+        if strength is not None and not trade_allowed(pair, direction, int(strength[i]), macro_p):
             i += 1
             continue
 
