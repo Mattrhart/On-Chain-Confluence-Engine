@@ -164,6 +164,8 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
     bear_ign = np.zeros(n, dtype=bool)
     bull_dot = np.zeros(n, dtype=bool)
     bear_dot = np.zeros(n, dtype=bool)
+    bull_dot_kind = np.full(n, None, dtype=object)
+    bear_dot_kind = np.full(n, None, dtype=object)
 
     # Donchian channels for structure breakout (shifted — no lookahead)
     if p.use_structure_breakout:
@@ -220,20 +222,24 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
             if bull_state and htf_ok_bull and ang_ok_bull and bull_hits < max_dots:
                 if (low[i] <= fast_v[i]) and (close[i] >= slow_v[i]):
                     bull_dot[i] = True
+                    bull_dot_kind[i] = "retest"
                     bull_hits += 1
                     fired_bull = True
                 elif p.fire_rocket_dot and not fired_bull and rb[i]:
                     bull_dot[i] = True
+                    bull_dot_kind[i] = "rocket"
                     bull_hits += 1
                     fired_bull = True
 
             if bear_state and htf_ok_bear and ang_ok_bear and bear_hits < max_dots:
                 if (high[i] >= fast_v[i]) and (close[i] <= slow_v[i]):
                     bear_dot[i] = True
+                    bear_dot_kind[i] = "retest"
                     bear_hits += 1
                     fired_bear = True
                 elif p.fire_rocket_dot and not fired_bear and rs[i]:
                     bear_dot[i] = True
+                    bear_dot_kind[i] = "rocket"
                     bear_hits += 1
                     fired_bear = True
 
@@ -245,11 +251,13 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
                         and not bull_dot[i] and bo_range_ok
                         and not np.isnan(don_hi[i]) and close[i] > don_hi[i]):
                     bull_dot[i] = True
+                    bull_dot_kind[i] = "breakout"
                     bull_bo_hits += 1
                 if (bear_state and htf_ok_bear and ang_ok_bear and bear_bo_hits < max_bo
                         and not bear_dot[i] and bo_range_ok
                         and not np.isnan(don_lo[i]) and close[i] < don_lo[i]):
                     bear_dot[i] = True
+                    bear_dot_kind[i] = "breakout"
                     bear_bo_hits += 1
 
         bull_ign[i] = bull_state
@@ -259,5 +267,7 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
     df["bear_ignited"] = bear_ign
     df["bull_dot"] = bull_dot
     df["bear_dot"] = bear_dot
+    df["bull_dot_kind"] = bull_dot_kind
+    df["bear_dot_kind"] = bear_dot_kind
     df["risk_atr"] = _atr(df, p.risk_atr_len)
     return df
