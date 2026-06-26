@@ -18,9 +18,10 @@ from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_macro_bias, cache_status, live_pillar_summary
 from app.trading_config import macro_settings_for_ticker, risk_settings_for_ticker, compute_atr_levels
+from app.atr_live import fetch_live_risk_atr
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.5.4")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.5.5")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -130,7 +131,7 @@ async def _startup_macro_cache():
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.5.4 Active - Live 6-Pillar Macro Engaged",
+        "status": "Engine V5.5.5 Active - Live 6-Pillar Macro Engaged",
         "macro_cache": status,
     }
 
@@ -359,7 +360,7 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
     else:
         countdown = "DATA REFRESH REQUIRED"
 
-    # --- Signal lock + stop levels (V5.5.2) ---
+    # --- Stop levels: server-side ATR(14) for atr-mode assets (no plot in TV JSON) ---
     risk_cfg = risk_settings_for_ticker(raw_ticker)
     stop_block = ""
     if payload.signal_time:
@@ -367,16 +368,22 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
         stop_block += f"\n🔒 <b>Signal locked:</b> <code>{bar_ts.strftime('%Y-%m-%d %H:%M UTC')}</code> bar close\n"
         stop_block += "<i>Later ribbon/disarm changes do NOT revoke this alert.</i>\n"
 
-    if risk_cfg["stop_mode"] == "atr" and payload.risk_atr and payload.risk_atr > 0:
-        mult = payload.atr_sl_mult or risk_cfg["atr_sl_mult"]
-        rr = payload.rr_target or risk_cfg["rr_target"]
-        lv = compute_atr_levels(direction, payload.price, payload.risk_atr, mult, rr)
-        stop_block += (
-            f"\n🎯 <b>ATR Stop Model</b> (auto)\n"
-            f"• Stop: <code>{lv['stop']:,.5f}</code>\n"
-            f"• Target ({rr}R): <code>{lv['target']:,.5f}</code>\n"
-            f"• Risk: <code>{lv['risk_points']:,.5f}</code> ({mult}× ATR)\n"
-        )
+    if risk_cfg["stop_mode"] == "atr":
+        risk_atr_val = payload.risk_atr if payload.risk_atr and payload.risk_atr > 0 else None
+        if risk_atr_val is None:
+            risk_atr_val = fetch_live_risk_atr(raw_ticker, payload.timeframe)
+        if risk_atr_val and risk_atr_val > 0:
+            mult = payload.atr_sl_mult or risk_cfg["atr_sl_mult"]
+            rr = payload.rr_target or risk_cfg["rr_target"]
+            lv = compute_atr_levels(direction, payload.price, risk_atr_val, mult, rr)
+            stop_block += (
+                f"\n🎯 <b>ATR Stop Model</b> (auto · server ATR14)\n"
+                f"• Stop: <code>{lv['stop']:,.5f}</code>\n"
+                f"• Target ({rr}R): <code>{lv['target']:,.5f}</code>\n"
+                f"• Risk: <code>{lv['risk_points']:,.5f}</code> ({mult}× ATR)\n"
+            )
+        else:
+            stop_block += "\n🎯 <b>ATR Stop:</b> <code>pending</code> — could not fetch live ATR; size off chart\n"
     elif risk_cfg["stop_mode"] == "manual":
         stop_block += (
             "\n📐 <b>Stop:</b> <code>MANUAL</code> — place below/above 15m structure "
@@ -400,7 +407,7 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
         f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.5.4</i>"
+        f"📈 <i>Confluence Engine V5.5.5</i>"
     )
 
     await send_telegram_notification(rich_message)
