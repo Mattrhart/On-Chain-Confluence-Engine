@@ -40,10 +40,14 @@ pure_bg_bear = ema20_4h < ema50_4h
 is_ct_bull = pure_bg_bear
 is_ct_bear = pure_bg_bull
 ct_max_bars = input.int(16, "Counter-Trend Max Duration (Bars)")
-bars_bull = ta.barssince(ta.crossover(fast_ma, slow_ma))
-bars_bear = ta.barssince(ta.crossunder(fast_ma, slow_ma))
+cross_over = ta.crossover(fast_ma, slow_ma)
+cross_under = ta.crossunder(fast_ma, slow_ma)
+bars_bull = ta.barssince(cross_over)
+bars_bear = ta.barssince(cross_under)
 ct_exhausted_bull = is_ct_bull and (bars_bull >= ct_max_bars)
 ct_exhausted_bear = is_ct_bear and (bars_bear >= ct_max_bars)
+disarm_bull = (close < slow_ma) or cross_under or ct_exhausted_bull
+disarm_bear = (close > slow_ma) or cross_over or ct_exhausted_bear
 
 std_bull = (fast_ma > slow_ma) and (gap_atr >= req_gap) and not is_choppy_bull
 std_bear = (fast_ma < slow_ma) and (gap_atr >= req_gap) and not is_choppy_bear
@@ -56,9 +60,9 @@ if trigger_bull
     bull_ignited := true
 if trigger_bear
     bear_ignited := true
-if (close < slow_ma) or ta.crossunder(fast_ma, slow_ma) or ct_exhausted_bull
+if disarm_bull
     bull_ignited := false
-if (close > slow_ma) or ta.crossover(fast_ma, slow_ma) or ct_exhausted_bear
+if disarm_bear
     bear_ignited := false
 
 color ribbon_color = bull_ignited ? color.new(#089981, 75) : bear_ignited ? color.new(#f23645, 75) : color.new(color.gray, 90)
@@ -83,8 +87,10 @@ if barstate.isconfirmed
         bear_dot := true
         bear_hits += 1
 
-plotshape(bull_dot, title="Long Retest", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
-plotshape(bear_dot, title="Short Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
+plotshape(bull_dot, title="Long Entry", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
+plotshape(bear_dot, title="Short Entry", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","secret_token":"YOUR_SECRET"}')
-alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","secret_token":"YOUR_SECRET"}')
+// V5.5.0 webhook — required: ticker, price, direction, timeframe, secret_token
+// rr_target / atr_sl_mult are optional (ignored by server today; safe for Jarvis)
+alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
