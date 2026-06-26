@@ -17,7 +17,7 @@ from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_m
 from app.trading_config import macro_settings_for_ticker
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.5.0")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.5.1")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -78,7 +78,7 @@ async def _startup_macro_cache():
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.5.0 Active - Live 6-Pillar Macro Engaged",
+        "status": "Engine V5.5.1 Active - Live 6-Pillar Macro Engaged",
         "macro_cache": status,
     }
 
@@ -322,7 +322,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
         f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.5.0</i>"
+        f"📈 <i>Confluence Engine V5.5.1</i>"
     )
 
     await send_telegram_notification(rich_message)
