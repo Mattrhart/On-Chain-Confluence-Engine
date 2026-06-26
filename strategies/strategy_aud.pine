@@ -1,4 +1,5 @@
 // FV Ribbon — AUDUSD — Institutional V4 (15m chart)
+// v5.5.2 — single risk_atr definition (line ~115); re-paste entire script if TV shows duplicate error
 // 15m verified: Sharpe 1.75 | 33 trades/60d | PF 1.34 | σ≥12° 1 dot + Donchian BO
 //@version=6
 indicator("FV Ribbon [AUD V4]", shorttitle="FV AUD", overlay=true)
