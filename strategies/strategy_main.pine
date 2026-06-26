@@ -90,7 +90,17 @@ if barstate.isconfirmed
 plotshape(bull_dot, title="Long Entry", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
 plotshape(bear_dot, title="Short Entry", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-// V5.5.0 webhook — required: ticker, price, direction, timeframe, secret_token
-// rr_target / atr_sl_mult are optional (ignored by server today; safe for Jarvis)
-alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
-alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+// Risk ATR(14) — matches Python backtester; hidden plot for webhook {{plot("Risk ATR")}}
+risk_atr = ta.atr(14)
+plot(risk_atr, "Risk ATR", display=display.none)
+
+// Locked markers — survive ribbon disarm (audit trail on chart)
+if barstate.isconfirmed and bull_dot
+    label.new(bar_index, low, "L", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=#089981, textcolor=color.white, size=size.tiny)
+if barstate.isconfirmed and bear_dot
+    label.new(bar_index, high, "S", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=#f23645, textcolor=color.white, size=size.tiny)
+
+// V5.5.2 webhook — set TV alert to "Once per bar close"
+// risk_atr + signal_time enable ATR stops + locked signal in Telegram
+alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","risk_atr":{{plot("Risk ATR")}},"signal_time":{{time}},"rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","risk_atr":{{plot("Risk ATR")}},"signal_time":{{time}},"rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')

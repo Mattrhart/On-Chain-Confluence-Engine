@@ -157,7 +157,7 @@ plotshape(bear_dot, title="Bearish Fanned Retest", style=shape.circle, location=
 risk_atr_len  = input.int(14,   "Risk ATR Length",           group="Risk Model")
 atr_sl_mult   = input.float(1.5, "Stop = ATR x",  step=0.1,   group="Risk Model")
 rr_target     = input.float(1.5, "Reward:Risk Target", step=0.1, group="Risk Model")
-exit_on_disarm= input.bool(true, "Also exit when ribbon disarms", group="Risk Model")
+exit_on_disarm= input.bool(false, "Also exit when ribbon disarms", group="Risk Model")
 allow_longs   = input.bool(true, "Take Longs",  group="Risk Model")
 allow_shorts  = input.bool(true, "Take Shorts", group="Risk Model")
 

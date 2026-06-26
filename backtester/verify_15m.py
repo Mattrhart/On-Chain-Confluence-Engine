@@ -21,7 +21,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import data_providers as dp
-from deploy_profiles import DEPLOY_RIBBON, DEPLOY_MACRO, DEPLOY_UNIVERSE, DEPLOY_RR
+from deploy_profiles import DEPLOY_RIBBON, DEPLOY_MACRO, DEPLOY_UNIVERSE, DEPLOY_RR, deploy_risk
 from fv_ribbon import RibbonParams, compute_signals
 from macro_filter import MacroParams, align_strength_to_signals, load_macro_strength
 from backtest import RiskParams, run_backtest, compute_metrics, Trade
@@ -45,7 +45,7 @@ def load_bundle(pair: str):
     macro = load_macro_strength(mc["pmi_source"])
     strength = align_strength_to_signals(px.index, macro)
     rr = DEPLOY_RR.get(sym, 1.5)
-    risk = RiskParams(1.5, rr)
+    risk = deploy_risk(sym)
     macro_p = MacroParams(not mc["require_non_neutral"])
     sig = compute_signals(px, rp)
     trades = run_backtest(sig, pair, risk, strength, macro_p)
@@ -177,7 +177,7 @@ def main():
     if "oecd" not in macro_cache:
         macro_cache["oecd"] = load_macro_strength("oecd")
     aud_strength = align_strength_to_signals(aud_px.index, macro_cache["oecd"])
-    aud_risk = RiskParams(1.5, DEPLOY_RR["AUDUSD"])
+    aud_risk = deploy_risk("AUDUSD")
     aud_macro_p = MacroParams(not aud_mc["require_non_neutral"])
     m_r, m_f, extra_dots = aud_edge_attribution(aud_px, aud_strength, aud_macro_p, aud_risk)
     print(f"  Retest-only:     trades={m_r['trades']}  Sharpe={m_r['sharpe_ratio']:.2f}  PF={m_r['profit_factor']:.2f}")

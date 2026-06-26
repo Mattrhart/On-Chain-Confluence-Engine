@@ -4,11 +4,11 @@ from __future__ import annotations
 import data_providers as dp
 from deploy_profiles import (
     DEPLOY_RIBBON, DEPLOY_MACRO, DEPLOY_UNIVERSE, DEPLOY_RR,
-    DEPLOY_INTERVAL, DEPLOY_PERIOD,
+    DEPLOY_INTERVAL, DEPLOY_PERIOD, deploy_risk,
 )
 from fv_ribbon import compute_signals
 from macro_filter import MacroParams, align_strength_to_signals, load_macro_strength
-from backtest import RiskParams, run_backtest, compute_metrics
+from backtest import run_backtest, compute_metrics
 
 macro = {k: load_macro_strength(k) for k in ("oecd", "ism")}
 print(f"Institutional V4 — {DEPLOY_PERIOD} {DEPLOY_INTERVAL} — trades AFTER macro filter\n")
@@ -24,7 +24,7 @@ for pair in DEPLOY_UNIVERSE:
     strength = align_strength_to_signals(sig.index, macro[mc["pmi_source"]])
     rr = DEPLOY_RR.get(sym, 1.5)
     m = compute_metrics(
-        run_backtest(sig, pair, RiskParams(1.5, rr), strength, MacroParams(not mc["require_non_neutral"])))
+        run_backtest(sig, pair, deploy_risk(sym), strength, MacroParams(not mc["require_non_neutral"])))
     total += m["trades"]
     days = max((sig.index[-1] - sig.index[0]).days, 1)
     yr = m["trades"] / days * 365

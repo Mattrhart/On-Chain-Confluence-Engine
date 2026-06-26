@@ -14,10 +14,10 @@ from dotenv import load_dotenv
 from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_macro_bias, cache_status, live_pillar_summary
-from app.trading_config import macro_settings_for_ticker
+from app.trading_config import macro_settings_for_ticker, risk_settings_for_ticker, compute_atr_levels
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.5.1")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.5.2")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -66,6 +66,11 @@ class TradingViewPayload(BaseModel):
     direction: str
     timeframe: str
     secret_token: str
+    # Optional — Pine sends these for ATR stop routing (V5.5.2+)
+    risk_atr: float | None = None
+    atr_sl_mult: float | None = None
+    rr_target: float | None = None
+    signal_time: int | None = None  # bar open time ms (TradingView {{time}})
 
 
 @app.on_event("startup")
@@ -307,12 +312,37 @@ async def process_tradingview_signal(payload: TradingViewPayload):
     else:
         countdown = "DATA REFRESH REQUIRED"
 
+    # --- Signal lock + stop levels (V5.5.2) ---
+    risk_cfg = risk_settings_for_ticker(raw_ticker)
+    stop_block = ""
+    if payload.signal_time:
+        bar_ts = datetime.fromtimestamp(payload.signal_time / 1000, tz=timezone.utc)
+        stop_block += f"\n🔒 <b>Signal locked:</b> <code>{bar_ts.strftime('%Y-%m-%d %H:%M UTC')}</code> bar close\n"
+        stop_block += "<i>Later ribbon/disarm changes do NOT revoke this alert.</i>\n"
+
+    if risk_cfg["stop_mode"] == "atr" and payload.risk_atr and payload.risk_atr > 0:
+        mult = payload.atr_sl_mult or risk_cfg["atr_sl_mult"]
+        rr = payload.rr_target or risk_cfg["rr_target"]
+        lv = compute_atr_levels(direction, payload.price, payload.risk_atr, mult, rr)
+        stop_block += (
+            f"\n🎯 <b>ATR Stop Model</b> (auto)\n"
+            f"• Stop: <code>{lv['stop']:,.5f}</code>\n"
+            f"• Target ({rr}R): <code>{lv['target']:,.5f}</code>\n"
+            f"• Risk: <code>{lv['risk_points']:,.5f}</code> ({mult}× ATR)\n"
+        )
+    elif risk_cfg["stop_mode"] == "manual":
+        stop_block += (
+            "\n📐 <b>Stop:</b> <code>MANUAL</code> — place below/above 15m structure "
+            "or OB wick (your discretion)\n"
+        )
+
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} <b>DECISION: {decision} ({dir_label})</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"💎 <b>Asset:</b> <code>${symbol}</code>\n"
         f"🏷️ <b>Sector:</b> <code>{sector}</code>\n"
         f"📊 <b>TF:</b> <code>{payload.timeframe}m</code> | <b>Price:</b> <code>${price_display}</code>\n"
+        f"{stop_block}"
         f"━━━━━━━━━━━━━━━\n"
         f"{'🌍 <b>MACRO TELEMETRY</b>' if is_forex or is_index else '🛡️ <b>HYBRID INTELLIGENCE</b>'}\n"
         f"• Status: <code>{metric_display}</code>\n• Conviction: {stars}\n"
@@ -322,7 +352,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
         f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.5.1</i>"
+        f"📈 <i>Confluence Engine V5.5.2</i>"
     )
 
     await send_telegram_notification(rich_message)
@@ -339,8 +369,10 @@ async def test_alert(ticker: str = "AUDUSD", direction: str = "LONG"):
         ticker=ticker,
         price=1.0 if "USD" in ticker.upper() and "ETH" not in ticker.upper() else 3500.0,
         direction=direction,
-        timeframe="60",
+        timeframe="15",
         secret_token=secret,
+        risk_atr=0.0012 if "USD" in ticker.upper() else 45.0,
+        signal_time=int(datetime.now(timezone.utc).timestamp() * 1000),
     )
     await process_tradingview_signal(payload)
     return {

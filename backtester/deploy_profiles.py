@@ -8,6 +8,10 @@ AUD V4: tight ribbon + Donchian structure breakout (quality over quantity).
 
 from __future__ import annotations
 from fv_ribbon import RibbonParams
+from backtest import RiskParams
+
+# Live execution: hold until hard stop or RR target (no ribbon-disarm exit)
+DEPLOY_EXIT_ON_DISARM = False
 
 # Institutional V4 — 15m-validated (60d yfinance, post-macro)
 DEPLOY_RIBBON: dict[str, RibbonParams] = {
@@ -54,6 +58,13 @@ DEPLOY_RR = {
     "ETHUSD": 3.0, "ETHUSDT": 3.0,
     "AUDUSD": 1.5, "NZDUSD": 3.0, "USDCHF": 1.5,
 }
+
+
+def deploy_risk(sym: str) -> RiskParams:
+    """Standard deploy risk model — set-and-forget until stop or target."""
+    s = sym.upper().replace("=X", "").replace("-USD", "USD")
+    rr = DEPLOY_RR.get(s, 1.5)
+    return RiskParams(1.5, rr, exit_on_disarm=DEPLOY_EXIT_ON_DISARM)
 
 # Live chart timeframe — all profiles validated on this interval
 DEPLOY_INTERVAL = "15m"

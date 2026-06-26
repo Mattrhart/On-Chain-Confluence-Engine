@@ -57,11 +57,12 @@ def main():
     ap.add_argument("--atr-mult", type=float, default=1.5)
     ap.add_argument("--no-neutral", action="store_true",
                     help="block trades when usd_strength yields neutral bias (0)")
-    ap.add_argument("--no-disarm-exit", action="store_true")
+    ap.add_argument("--disarm-exit", action="store_true",
+                    help="Exit open trades when ribbon disarms (legacy; default is hold to stop/target)")
     args = ap.parse_args()
 
     risk_p = RiskParams(atr_sl_mult=args.atr_mult, rr_target=args.rr,
-                        exit_on_disarm=not args.no_disarm_exit)
+                        exit_on_disarm=args.disarm_exit)
     macro_p = MacroParams(allow_neutral=not args.no_neutral)
 
     print("Building 6-pillar macro (FRED, publication-lag adjusted)...")

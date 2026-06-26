@@ -5,7 +5,7 @@ Risk model mirrors strategy_backtest.pine:
   - enter at the close of the signal (dot) bar  (process_orders_on_close)
   - stop  = entry -/+ atr_sl_mult * risk_atr
   - target = entry +/- atr_sl_mult * risk_atr * rr_target
-  - optional: exit when the ribbon disarms
+  - optional: exit when the ribbon disarms (default OFF — set-and-forget until stop/target)
   - one position at a time (no pyramiding); if stop & target hit in the same
     bar, the STOP is assumed first (conservative).
 
@@ -25,7 +25,7 @@ from macro_filter import MacroParams, trade_allowed
 class RiskParams:
     atr_sl_mult: float = 1.5
     rr_target: float = 1.5
-    exit_on_disarm: bool = True
+    exit_on_disarm: bool = False
     allow_longs: bool = True
     allow_shorts: bool = True
     risk_per_trade: float = 0.01   # fraction of equity risked per trade (for the curve)
