@@ -91,12 +91,12 @@ plotshape(bull_dot, title="Long Retest", style=shape.circle, location=location.b
 plotshape(bear_dot, title="Short Retest", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
 risk_atr = ta.atr(14)
-plot(risk_atr, "Risk ATR", display=display.none)
+plot(nz(risk_atr, 0.0), "Risk ATR", display=display.none)
 
 if barstate.isconfirmed and bull_dot
     label.new(bar_index, low, "L", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=#089981, textcolor=color.white, size=size.tiny)
 if barstate.isconfirmed and bear_dot
     label.new(bar_index, high, "S", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=#f23645, textcolor=color.white, size=size.tiny)
 
-alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","risk_atr":{{plot("Risk ATR")}},"signal_time":{{time}},"rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
-alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","risk_atr":{{plot("Risk ATR")}},"signal_time":{{time}},"rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
+alertcondition(bull_dot, "Long Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","risk_atr":{{plot_2}},"signal_time":{{time}},"rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
+alertcondition(bear_dot, "Short Retest", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","risk_atr":{{plot_2}},"signal_time":{{time}},"rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')

@@ -1,5 +1,8 @@
 import os
 import sys
+import json
+import re
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,8 +11,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from pydantic import BaseModel, field_validator
 from dotenv import load_dotenv
 from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
@@ -17,7 +20,7 @@ from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_m
 from app.trading_config import macro_settings_for_ticker, risk_settings_for_ticker, compute_atr_levels
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.5.2")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.5.3")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -72,6 +75,48 @@ class TradingViewPayload(BaseModel):
     rr_target: float | None = None
     signal_time: int | None = None  # bar open time ms (TradingView {{time}})
 
+    @field_validator("risk_atr", "atr_sl_mult", "rr_target", mode="before")
+    @classmethod
+    def _coerce_optional_float(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, str) and v.strip().lower() in ("nan", "null", "n/a", "na"):
+            return None
+        try:
+            f = float(v)
+            if f != f:  # NaN
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
+    @field_validator("signal_time", mode="before")
+    @classmethod
+    def _coerce_signal_time(cls, v):
+        if v is None or v == "":
+            return None
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
+
+def _sanitize_tradingview_json(raw: str) -> str:
+    """TradingView may emit NaN/Infinity or empty plot values — invalid strict JSON."""
+    s = raw.strip()
+    s = re.sub(r":\s*NaN\b", ": null", s)
+    s = re.sub(r":\s*-?Infinity\b", ": null", s)
+    s = re.sub(r":\s*,", ": null,", s)
+    s = re.sub(r":\s*}", ": null}", s)
+    return s
+
+
+async def _safe_process_signal(payload: TradingViewPayload):
+    try:
+        await process_tradingview_signal(payload)
+    except Exception:
+        print(f"🔥 BACKGROUND PROCESS FAILED:\n{traceback.format_exc()}")
+
 
 @app.on_event("startup")
 async def _startup_macro_cache():
@@ -83,7 +128,7 @@ async def _startup_macro_cache():
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.5.1 Active - Live 6-Pillar Macro Engaged",
+        "status": "Engine V5.5.3 Active - Live 6-Pillar Macro Engaged",
         "macro_cache": status,
     }
 
@@ -135,7 +180,7 @@ def _macro_decision(direction: str, macro_bias: int, require_non_neutral: bool) 
 
 
 # --- THE BACKGROUND WORKER (Heavy Lifting) ---
-async def process_tradingview_signal(payload: TradingViewPayload):
+async def process_tradingview_signal(payload: TradingViewPayload, *, source: str = "TradingView Live"):
     await ensure_macro_fresh()
 
     raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
@@ -338,6 +383,7 @@ async def process_tradingview_signal(payload: TradingViewPayload):
 
     rich_message = (
         f"{'🟩' if decision == 'EXECUTE' else '🟥'} <b>DECISION: {decision} ({dir_label})</b>\n"
+        f"📡 <b>Source:</b> <code>{source}</code>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"💎 <b>Asset:</b> <code>${symbol}</code>\n"
         f"🏷️ <b>Sector:</b> <code>{sector}</code>\n"
@@ -352,29 +398,33 @@ async def process_tradingview_signal(payload: TradingViewPayload):
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
         f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.5.2</i>"
+        f"📈 <i>Confluence Engine V5.5.3</i>"
     )
 
     await send_telegram_notification(rich_message)
 
 
 @app.get("/test-alert")
-async def test_alert(ticker: str = "AUDUSD", direction: str = "LONG"):
+async def test_alert(ticker: str = "AUDUSD", direction: str = "LONG", key: str = ""):
     """
     Send a live Telegram test using current FRED macro cache.
-    Optional query: ?ticker=ETHUSD&direction=SHORT
+    Requires: ?key=TRADINGVIEW_SECRET (prevents accidental ghost alerts)
+    Example: /test-alert?ticker=ETHUSD&direction=SHORT&key=hype_retest_2026
     """
-    secret = os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026")
+    expected = os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026")
+    if key != expected:
+        raise HTTPException(status_code=401, detail="Pass ?key=TRADINGVIEW_SECRET to run test alerts")
+
     payload = TradingViewPayload(
         ticker=ticker,
         price=1.0 if "USD" in ticker.upper() and "ETH" not in ticker.upper() else 3500.0,
         direction=direction,
         timeframe="15",
-        secret_token=secret,
+        secret_token=expected,
         risk_atr=0.0012 if "USD" in ticker.upper() else 45.0,
         signal_time=int(datetime.now(timezone.utc).timestamp() * 1000),
     )
-    await process_tradingview_signal(payload)
+    await process_tradingview_signal(payload, source="🧪 MANUAL TEST — not from your chart")
     return {
         "status": "sent",
         "ticker": ticker,
@@ -387,9 +437,26 @@ async def test_alert(ticker: str = "AUDUSD", direction: str = "LONG"):
 
 @app.post("/webhook/tradingview")
 @app.post("/webhook/tradingview/")
-async def tradingview_webhook(payload: TradingViewPayload, background_tasks: BackgroundTasks):
-    if payload.secret_token != os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026"):
+async def tradingview_webhook(request: Request, background_tasks: BackgroundTasks):
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    print(f"📥 WEBHOOK ({len(raw)} bytes): {raw[:800]}")
+
+    try:
+        data = json.loads(_sanitize_tradingview_json(raw))
+    except json.JSONDecodeError as exc:
+        print(f"🔥 WEBHOOK JSON PARSE FAILED: {exc}\nRAW: {raw}")
+        raise HTTPException(status_code=422, detail=f"Invalid JSON: {exc}") from exc
+
+    expected = os.getenv("TRADINGVIEW_SECRET", "hype_retest_2026")
+    if data.get("secret_token") != expected:
+        print(f"🔥 WEBHOOK AUTH FAILED for ticker={data.get('ticker')}")
         raise HTTPException(status_code=401)
 
-    background_tasks.add_task(process_tradingview_signal, payload)
+    try:
+        payload = TradingViewPayload.model_validate(data)
+    except Exception as exc:
+        print(f"🔥 WEBHOOK PAYLOAD VALIDATION FAILED: {exc}\ndata={data}")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    background_tasks.add_task(_safe_process_signal, payload)
     return {"status": "success", "message": "Signal securely received"}
