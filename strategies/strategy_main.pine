@@ -102,5 +102,5 @@ if barstate.isconfirmed and bear_dot
 
 // V5.5.2 webhook — set TV alert to "Once per bar close"
 // risk_atr + signal_time enable ATR stops + locked signal in Telegram
-alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","risk_atr":{{plot_2}},"signal_time":{{time}},"rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
-alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","risk_atr":{{plot_2}},"signal_time":{{time}},"rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
+alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","secret_token":"hype_retest_2026"}')
+alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","secret_token":"hype_retest_2026"}')

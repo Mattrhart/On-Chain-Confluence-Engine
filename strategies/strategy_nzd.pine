@@ -134,5 +134,5 @@ if barstate.isconfirmed and bull_dot
 if barstate.isconfirmed and bear_dot
     label.new(bar_index, high, "S", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=#f23645, textcolor=color.white, size=size.tiny)
 
-alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","risk_atr":{{plot_2}},"signal_time":{{time}},"rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
-alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","risk_atr":{{plot_2}},"signal_time":{{time}},"rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"hype_retest_2026"}')
+alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","secret_token":"hype_retest_2026"}')
+alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","secret_token":"hype_retest_2026"}')

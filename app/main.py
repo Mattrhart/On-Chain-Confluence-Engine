@@ -20,7 +20,7 @@ from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_m
 from app.trading_config import macro_settings_for_ticker, risk_settings_for_ticker, compute_atr_levels
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.5.3")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.5.4")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -102,8 +102,10 @@ class TradingViewPayload(BaseModel):
 
 
 def _sanitize_tradingview_json(raw: str) -> str:
-    """TradingView may emit NaN/Infinity or empty plot values — invalid strict JSON."""
+    """TradingView alert editor often inserts line breaks inside JSON strings — invalid JSON."""
     s = raw.strip()
+    # Collapse newlines TradingView inserts when the message field wraps (fixes split secrets)
+    s = re.sub(r"\s*\n\s*", "", s)
     s = re.sub(r":\s*NaN\b", ": null", s)
     s = re.sub(r":\s*-?Infinity\b", ": null", s)
     s = re.sub(r":\s*,", ": null,", s)
@@ -128,7 +130,7 @@ async def _startup_macro_cache():
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.5.3 Active - Live 6-Pillar Macro Engaged",
+        "status": "Engine V5.5.4 Active - Live 6-Pillar Macro Engaged",
         "macro_cache": status,
     }
 
@@ -398,7 +400,7 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
         f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.5.3</i>"
+        f"📈 <i>Confluence Engine V5.5.4</i>"
     )
 
     await send_telegram_notification(rich_message)
