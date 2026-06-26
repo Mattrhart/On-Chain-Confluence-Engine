@@ -39,6 +39,11 @@ class RibbonParams:
     # --- Expansion capture (catch moves beyond first retest) ---
     max_retest_dots: int = 1         # max entry dots per ribbon arm (1 = legacy first-strike only)
     fire_rocket_dot: bool = False    # also fire on vertical thrust bar (rocket override)
+    # --- Structure breakout edge (non-ribbon expansion capture) ---
+    use_structure_breakout: bool = False
+    breakout_lookback: int = 12      # Donchian lookback (uses [1] — no lookahead)
+    breakout_atr_mult: float = 1.0   # min bar range as multiple of risk ATR
+    max_breakout_dots: int = 1       # max breakout entries per ribbon arm
 
 
 # --- ta.* helpers (matched to Pine semantics) -------------------------------
@@ -160,10 +165,22 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
     bull_dot = np.zeros(n, dtype=bool)
     bear_dot = np.zeros(n, dtype=bool)
 
+    # Donchian channels for structure breakout (shifted — no lookahead)
+    if p.use_structure_breakout:
+        lb = max(2, p.breakout_lookback)
+        don_hi = df["high"].rolling(lb).max().shift(1).values
+        don_lo = df["low"].rolling(lb).min().shift(1).values
+        bar_range = (df["high"] - df["low"]).values
+        risk_atr_pre = _atr(df, p.risk_atr_len).values
+    else:
+        don_hi = don_lo = bar_range = risk_atr_pre = None
+
     bull_state = False
     bear_state = False
     bull_hits = 0
     bear_hits = 0
+    bull_bo_hits = 0
+    bear_bo_hits = 0
 
     for i in range(n):
         # 1) arm
@@ -179,8 +196,10 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
         # 3) reset hit counters when disarmed
         if not bull_state:
             bull_hits = 0
+            bull_bo_hits = 0
         if not bear_state:
             bear_hits = 0
+            bear_bo_hits = 0
         # 4) retest + optional rocket expansion dots
         if not np.isnan(fast_v[i]):
             htf_ok_bull = (not p.require_htf_align) or (e20_v[i] > e50_v[i])
@@ -217,6 +236,21 @@ def compute_signals(df: pd.DataFrame, p: RibbonParams = RibbonParams()) -> pd.Da
                     bear_dot[i] = True
                     bear_hits += 1
                     fired_bear = True
+
+            # Structure breakout (expansion capture — non-ribbon)
+            if p.use_structure_breakout and not np.isnan(fast_v[i]):
+                max_bo = max(1, p.max_breakout_dots)
+                bo_range_ok = bar_range[i] >= p.breakout_atr_mult * risk_atr_pre[i]
+                if (bull_state and htf_ok_bull and ang_ok_bull and bull_bo_hits < max_bo
+                        and not bull_dot[i] and bo_range_ok
+                        and not np.isnan(don_hi[i]) and close[i] > don_hi[i]):
+                    bull_dot[i] = True
+                    bull_bo_hits += 1
+                if (bear_state and htf_ok_bear and ang_ok_bear and bear_bo_hits < max_bo
+                        and not bear_dot[i] and bo_range_ok
+                        and not np.isnan(don_lo[i]) and close[i] < don_lo[i]):
+                    bear_dot[i] = True
+                    bear_bo_hits += 1
 
         bull_ign[i] = bull_state
         bear_ign[i] = bear_state

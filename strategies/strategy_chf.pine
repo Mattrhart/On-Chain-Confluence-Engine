@@ -1,7 +1,7 @@
-// FV Ribbon — USDCHF — Institutional V3
-// Backtest: Sharpe 1.92 | 168 trades/730d | PF 1.68 | σ≥12° | 2 retest dots | RR 1:1.5
+// FV Ribbon — USDCHF — Institutional V4 (15m chart)
+// 15m verified: Sharpe 2.44 | 55 trades/60d | PF 1.40 | σ≥6° | 2 retest dots | RR 1:1.5
 //@version=6
-indicator("FV Ribbon [CHF V3]", shorttitle="FV CHF", overlay=true)
+indicator("FV Ribbon [CHF V4]", shorttitle="FV CHF", overlay=true)
 
 const float MIN_SIGMA = 1e-10
 const float PI = 3.14159265359
@@ -9,7 +9,7 @@ const int YZ_LEN = 20
 const int ANGLE_LB = 13
 const int MA1_LENGTH = 10
 const int MA2_LENGTH = 50
-const float ANGLE_THRESH = 12.0
+const float ANGLE_THRESH = 6.0
 const int MAX_DOTS = 2
 const bool FIRE_ROCKET = false
 const float RR_TARGET = 1.5

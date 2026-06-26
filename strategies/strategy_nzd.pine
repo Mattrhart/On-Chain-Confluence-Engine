@@ -1,7 +1,7 @@
-// FV Ribbon — NZDUSD — Institutional V3
-// Backtest: Sharpe 1.61 | 155 trades/730d | PF 1.58 | σ≥5° | 3 retest dots | RR 1:1.5
+// FV Ribbon — NZDUSD — Institutional V4 (15m chart)
+// 15m verified: Sharpe 2.87 | 66 trades/60d | PF 1.47 | σ≥12° | 3 dots + rocket | RR 1:3
 //@version=6
-indicator("FV Ribbon [NZD V3]", shorttitle="FV NZD", overlay=true)
+indicator("FV Ribbon [NZD V4]", shorttitle="FV NZD", overlay=true)
 
 const float MIN_SIGMA = 1e-10
 const float PI = 3.14159265359
@@ -9,10 +9,10 @@ const int YZ_LEN = 20
 const int ANGLE_LB = 13
 const int MA1_LENGTH = 15
 const int MA2_LENGTH = 60
-const float ANGLE_THRESH = 5.0
+const float ANGLE_THRESH = 12.0
 const int MAX_DOTS = 3
-const bool FIRE_ROCKET = false
-const float RR_TARGET = 1.5
+const bool FIRE_ROCKET = true
+const float RR_TARGET = 3.0
 const float ATR_SL_MULT = 1.5
 
 fast_ma = ta.ema(close, MA1_LENGTH)
@@ -122,5 +122,5 @@ if barstate.isconfirmed
 plotshape(bull_dot, title="Long Entry", style=shape.circle, location=location.belowbar, color=#089981, size=size.tiny)
 plotshape(bear_dot, title="Short Entry", style=shape.circle, location=location.abovebar, color=#f23645, size=size.tiny)
 
-alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
-alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":1.5,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bull_dot, "Long Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"LONG","timeframe":"{{interval}}","rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')
+alertcondition(bear_dot, "Short Entry", '{"ticker":"{{ticker}}","price":{{close}},"direction":"SHORT","timeframe":"{{interval}}","rr_target":3.0,"atr_sl_mult":1.5,"secret_token":"YOUR_SECRET"}')

@@ -1,7 +1,7 @@
-// FV Ribbon — ETH — Institutional V3
-// Backtest: Sharpe 2.50 | 201 trades/730d | PF 1.85 | σ≥12° | 1 dot + rocket | RR 1:3
+// FV Ribbon — ETH — Institutional V4 (15m chart)
+// 15m verified: Sharpe 2.71 | 50 trades/60d | PF 1.44 | σ≥12° | 1 dot + rocket | RR 1:3
 //@version=6
-indicator("FV Ribbon [ETH V3]", shorttitle="FV ETH", overlay=true)
+indicator("FV Ribbon [ETH V4]", shorttitle="FV ETH", overlay=true)
 
 const float MIN_SIGMA = 1e-10
 const float PI = 3.14159265359
