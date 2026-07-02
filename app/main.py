@@ -22,7 +22,7 @@ from app.trading_config import macro_settings_for_ticker, risk_settings_for_tick
 from app.atr_live import fetch_live_risk_atr
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.6.0")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.6.1")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -132,7 +132,7 @@ async def _startup_macro_cache():
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.6.0 Active - Live Calendar + 6-Pillar Macro",
+        "status": "Engine V5.6.1 Active - 13-Pillar FRED + Live Calendar",
         "macro_cache": status,
     }
 
@@ -419,7 +419,7 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
         f"🔄 <b>FRED Cache:</b> <code>{macro_sync}</code> ({cache_age_str})\n"
         f"{calendar_block}"
-        f"📈 <i>Confluence Engine V5.6.0</i>"
+        f"📈 <i>Confluence Engine V5.6.1</i>"
     )
 
     await send_telegram_notification(rich_message)
@@ -433,7 +433,7 @@ async def macro_status():
     ensure_calendar_fresh(now)
     cal = calendar_status(now)
     return {
-        "engine": "V5.6.0",
+        "engine": "V5.6.1",
         "fred_cache": cache_status(),
         "calendar": {
             "countdown": cal["countdown_line"],

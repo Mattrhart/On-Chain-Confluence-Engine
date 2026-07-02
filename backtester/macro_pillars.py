@@ -1,33 +1,14 @@
 """
-macro_pillars.py — the real 6-pillar USD macro engine (Layer 2), data-driven.
+macro_pillars.py — USD macro engine (Layer 2), data-driven from FRED.
 
-This replaces the static MACRO_CACHE dictionary from your live main.py with a
-LIVE/HISTORICAL data feed from FRED (free, no API key via the fredgraph CSV
-endpoint). It replicates your calculate_usd_macro_bias() scoring EXACTLY:
+Core 6 pillars (backtest-compatible):
+    FOMC +3, CPI +2, 10Y +2, NFP +2, PMI +2, Retail +1  → max ±12
 
-    FOMC          HAWKISH +3 / DOVISH -3
-    CPI           HOT     +2 / COLD   -2
-    10Y Yields    RISING  +2 / FALLING-2
-    NFP (labor)   STRONG  +2 / WEAK   -2
-    PMI           EXPANSION +2 / CONTRACTION -2
-    Retail Sales  STRONG  +1 / WEAK   -1
-    ----------------------------------------
-    usd_strength range: -12 .. +12   (>=8 "Wrecking Ball", <=-8 "Collapse")
+Extended pillars (live engine, extended=True):
+    DXY +2, Core PCE +2, PPI +1, Jobless Claims +1,
+    Unemployment +1, Industrial Production +1, 2Y Yields +1  → +9 more
 
-NO-LOOKAHEAD: each series is shifted forward by a realistic publication lag so a
-backtest on date t only ever sees macro that was actually released by t.
-
-PILLAR -> FRED SERIES
-    FOMC          DFEDTARU  Fed funds target range, upper limit (daily)
-    CPI           CPIAUCSL  CPI-U, all items, SA (monthly)
-    10Y Yields    DGS10     10-Year Treasury constant maturity (daily)
-    NFP           PAYEMS    Total nonfarm payrolls (monthly, level -> MoM change)
-    Retail Sales  RSAFS     Advance retail & food services sales (monthly)
-    PMI*          BSCICP03USM665S  OECD US Business Confidence (monthly, ~100 = neutral)
-
-* ISM PMI is not freely redistributable on FRED, so we use the OECD Business
-  Confidence Indicator as a documented proxy. Swap `series` below if you wire a
-  real ISM/S&P Global PMI feed later — the scoring contract stays identical.
+NO-LOOKAHEAD: publication lag on every series.
 """
 
 from __future__ import annotations
@@ -51,10 +32,10 @@ class Pillar:
     lag_days: int        # publication delay (no-lookahead)
     deadband: float = 0.0  # |momentum| <= deadband -> NEUTRAL (0)
     series_b: str | None = None  # optional second series (ISM composite)
+    invert_score: bool = False   # e.g. rising unemployment = USD negative
 
 
-def pillars_for(pmi_source: str = "oecd") -> list[Pillar]:
-    """Build pillar list with selectable PMI source."""
+def _core_pillars(pmi_source: str) -> list[Pillar]:
     base = [
         Pillar("fomc",         "DFEDTARU",        3, "level_change_hold", 180, 2),
         Pillar("cpi",          "CPIAUCSL",        2, "yoy_accel",           3, 45),
@@ -63,12 +44,31 @@ def pillars_for(pmi_source: str = "oecd") -> list[Pillar]:
         Pillar("retail_sales", "RSAFS",           1, "mom_pct",             1, 45),
     ]
     if pmi_source == "ism":
-        # ISM PMI is not on the free fredgraph CSV; use manufacturing + services
-        # momentum proxies: IPMAN (mfg production index) + UMCSENT (consumer sentiment).
         pmi = Pillar("pmi", "IPMAN", 2, "ism_composite_delta", 1, 30, series_b="UMCSENT")
     else:
         pmi = Pillar("pmi", "BSCICP03USM665S", 2, "level_vs_100", 3, 30)
     return base[:4] + [pmi] + base[4:]
+
+
+def _extended_pillars() -> list[Pillar]:
+    """Additional FRED series for live USD engine (V5.6.1+)."""
+    return [
+        Pillar("dxy",    "DTWEXBGS",  2, "level_change", 60, 1),   # broad USD index
+        Pillar("pce",    "PCEPILFE",  2, "yoy_accel",     3, 45),   # core PCE (Fed target)
+        Pillar("ppi",    "PPIFIS",    1, "mom_pct",       1, 35),   # pipeline inflation
+        Pillar("claims", "ICSA",      1, "level_change",  4, 7, invert_score=True),
+        Pillar("unrate", "UNRATE",    1, "level_change",  3, 35, invert_score=True),
+        Pillar("indpro", "INDPRO",    1, "mom_pct",       1, 35),   # industrial output
+        Pillar("dgs2",   "DGS2",      1, "level_change", 60, 1),   # front-end rates
+    ]
+
+
+def pillars_for(pmi_source: str = "oecd", extended: bool = False) -> list[Pillar]:
+    """Build pillar list. extended=True adds 7 live-only dollar drivers."""
+    pillars = _core_pillars(pmi_source)
+    if extended:
+        pillars = pillars + _extended_pillars()
+    return pillars
 
 # Human-readable status names (match your live engine's vocabulary)
 STATUS = {
@@ -78,6 +78,13 @@ STATUS = {
     "nfp":          ("STRONG", "WEAK"),
     "pmi":          ("EXPANSION", "CONTRACTION"),
     "retail_sales": ("STRONG", "WEAK"),
+    "dxy":          ("STRONG", "WEAK"),
+    "pce":          ("HOT", "COLD"),
+    "ppi":          ("HOT", "COLD"),
+    "claims":       ("ELEVATED", "LOW"),
+    "unrate":       ("TIGHT", "LOOSENING"),
+    "indpro":       ("EXPANSION", "CONTRACTION"),
+    "dgs2":         ("RISING", "FALLING"),
 }
 
 
@@ -125,8 +132,12 @@ def _score_pillar(p: Pillar) -> pd.DataFrame:
     mom = _momentum(raw, p)
 
     score = pd.Series(0, index=mom.index, dtype=int)
-    score[mom > p.deadband] = p.weight
-    score[mom < -p.deadband] = -p.weight
+    if p.invert_score:
+        score[mom > p.deadband] = -p.weight
+        score[mom < -p.deadband] = p.weight
+    else:
+        score[mom > p.deadband] = p.weight
+        score[mom < -p.deadband] = -p.weight
 
     pos, neg = STATUS[p.name]
     status = pd.Series("NEUTRAL", index=mom.index, dtype=object)
@@ -142,16 +153,14 @@ def _score_pillar(p: Pillar) -> pd.DataFrame:
 
 
 def build_macro_strength(pillars: list[Pillar] | None = None,
-                         pmi_source: str = "oecd") -> pd.DataFrame:
+                         pmi_source: str = "oecd",
+                         extended: bool = False) -> pd.DataFrame:
     """
-    Returns a daily DataFrame with each pillar's score/status plus:
-        usd_strength : int  (-12 .. +12)  — replicates calculate_usd_macro_bias()
-        market_state : str  (Wrecking Ball / Collapse / Trending / Choppy-Neutral)
-
-    pmi_source: "oecd" (default) or "ism" (IPMAN+UMCSENT MoM delta composite)
+    Returns daily DataFrame with pillar scores + usd_strength + market_state.
+    extended=True adds 7 live dollar drivers (used by production webhook).
     """
     if pillars is None:
-        pillars = pillars_for(pmi_source)
+        pillars = pillars_for(pmi_source, extended=extended)
     frames = []
     for p in pillars:
         try:
@@ -167,12 +176,17 @@ def build_macro_strength(pillars: list[Pillar] | None = None,
     macro[score_cols] = macro[score_cols].fillna(0)
     macro["usd_strength"] = macro[score_cols].sum(axis=1).astype(int)
 
+    max_abs = sum(p.weight for p in pillars)
+    wreck = max(8, int(max_abs * 0.55))
+    collapse = -wreck
+    neutral_band = max(3, int(max_abs * 0.2))
+
     def _state(v: int) -> str:
-        if v >= 8:
+        if v >= wreck:
             return "Wrecking Ball"
-        if v <= -8:
+        if v <= collapse:
             return "USD Collapse"
-        if -3 <= v <= 3:
+        if -neutral_band <= v <= neutral_band:
             return "Choppy / Neutral"
         return "Trending Bias"
 

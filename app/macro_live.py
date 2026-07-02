@@ -1,10 +1,12 @@
 """
-macro_live.py — in-memory cache for the 6-pillar FRED macro engine.
+macro_live.py — in-memory cache for the extended FRED macro engine.
 
-Refresh policy (V5.6):
-  • Every 4 hours (default)
+Refresh policy (V5.6.1):
+  • Every 2 hours (default)
   • Every 1 hour when a HIGH-impact USD event is within 24h
   • On cold start
+
+Live uses extended=True pillars (13 FRED series vs 6 in backtests).
 """
 
 from __future__ import annotations
@@ -28,8 +30,9 @@ _cache: dict[str, Any] = {
     "refresh_lock": asyncio.Lock(),
 }
 
-REFRESH_SECONDS = int(os.getenv("MACRO_REFRESH_SECONDS", str(4 * 3600)))
+REFRESH_SECONDS = int(os.getenv("MACRO_REFRESH_SECONDS", str(2 * 3600)))
 EVENT_PROXIMITY_REFRESH = int(os.getenv("MACRO_EVENT_REFRESH_SECONDS", str(3600)))
+LIVE_EXTENDED = os.getenv("MACRO_EXTENDED_PILLARS", "true").lower() in ("1", "true", "yes")
 
 NARRATIVE = {
     "fomc": {
@@ -55,6 +58,34 @@ NARRATIVE = {
     "retail_sales": {
         "STRONG": "• <b>Retail Sales:</b> Strong (+1) | <i>Consumer spending resilient.</i>",
         "WEAK":   "• <b>Retail Sales:</b> Weak (-1) | <i>Consumer pullback signals slowdown.</i>",
+    },
+    "dxy": {
+        "STRONG": "• <b>DXY (Broad USD):</b> Strengthening (+2) | <i>Trade-weighted dollar bid.</i>",
+        "WEAK":   "• <b>DXY (Broad USD):</b> Weakening (-2) | <i>USD losing cross-asset support.</i>",
+    },
+    "pce": {
+        "HOT":  "• <b>Core PCE:</b> Hot (+2) | <i>Fed's preferred gauge still sticky.</i>",
+        "COLD": "• <b>Core PCE:</b> Cold (-2) | <i>Disinflation in core PCE.</i>",
+    },
+    "ppi": {
+        "HOT":  "• <b>PPI:</b> Hot (+1) | <i>Pipeline inflation building.</i>",
+        "COLD": "• <b>PPI:</b> Cold (-1) | <i>Input costs easing.</i>",
+    },
+    "claims": {
+        "ELEVATED": "• <b>Jobless Claims:</b> Elevated (-1) | <i>Labor softening — easing bias.</i>",
+        "LOW":      "• <b>Jobless Claims:</b> Low (+1) | <i>Tight labor supports USD.</i>",
+    },
+    "unrate": {
+        "TIGHT":     "• <b>Unemployment:</b> Tight (+1) | <i>Low jobless rate supports USD.</i>",
+        "LOOSENING": "• <b>Unemployment:</b> Loosening (-1) | <i>Rising unemployment weighs on USD.</i>",
+    },
+    "indpro": {
+        "EXPANSION":   "• <b>Industrial Prod:</b> Expansion (+1) | <i>Factory output growing.</i>",
+        "CONTRACTION": "• <b>Industrial Prod:</b> Contraction (-1) | <i>Output slowdown.</i>",
+    },
+    "dgs2": {
+        "RISING":  "• <b>2Y Yield:</b> Rising (+1) | <i>Front-end rates pricing Fed hold/hike.</i>",
+        "FALLING": "• <b>2Y Yield:</b> Falling (-1) | <i>Rate-cut pricing at short end.</i>",
     },
 }
 
@@ -94,12 +125,18 @@ def _needs_refresh(now: datetime | None = None) -> bool:
     return False
 
 
+def _pillars(pmi_source: str):
+    return pillars_for(pmi_source, extended=LIVE_EXTENDED)
+
+
 def _fetch_all_sync() -> None:
     """Blocking FRED pull — run in executor thread."""
-    _cache["oecd"] = build_macro_strength(pmi_source="oecd")
-    _cache["ism"] = build_macro_strength(pmi_source="ism")
+    _cache["oecd"] = build_macro_strength(pmi_source="oecd", extended=LIVE_EXTENDED)
+    _cache["ism"] = build_macro_strength(pmi_source="ism", extended=LIVE_EXTENDED)
     _cache["fetched_at"] = datetime.now(timezone.utc)
-    print(f"[macro_live] Refreshed FRED pillars at {_cache['fetched_at'].isoformat()}")
+    n = len(_pillars("oecd"))
+    print(f"[macro_live] Refreshed {n} FRED pillars (extended={LIVE_EXTENDED}) at "
+          f"{_cache['fetched_at'].isoformat()}")
 
 
 async def ensure_macro_fresh() -> None:
@@ -137,6 +174,8 @@ def cache_status() -> dict:
         "fetched_at": fetched.isoformat() if fetched else None,
         "age_minutes": age_min,
         "refresh_interval_hours": REFRESH_SECONDS / 3600,
+        "extended_pillars": LIVE_EXTENDED,
+        "pillar_count": len(_pillars("oecd")) if LIVE_EXTENDED else 6,
         "oecd_rows": len(_cache["oecd"]) if _cache["oecd"] is not None else 0,
         "ism_rows": len(_cache["ism"]) if _cache["ism"] is not None else 0,
     }
@@ -152,7 +191,7 @@ def calculate_usd_macro_bias(pmi_source: str = "oecd") -> tuple[int, list[str]]:
     usd_strength = int(latest["usd_strength"])
     reasons: list[str] = []
 
-    for p in pillars_for(pmi_source):
+    for p in _pillars(pmi_source):
         status = str(latest.get(f"{p.name}_status", "NEUTRAL"))
         if status != "NEUTRAL" and p.name in NARRATIVE and status in NARRATIVE[p.name]:
             reasons.append(NARRATIVE[p.name][status])
@@ -167,7 +206,7 @@ def live_pillar_summary(pmi_source: str = "oecd") -> str:
     macro = get_macro_frame(pmi_source)
     latest = macro.dropna(subset=["usd_strength"]).iloc[-1]
     parts = []
-    for p in pillars_for(pmi_source):
+    for p in _pillars(pmi_source):
         sc = latest.get(f"{p.name}_score", 0)
         st = latest.get(f"{p.name}_status", "NEUTRAL")
         parts.append(f"{p.name.upper()}:{st}({int(sc):+d})")
