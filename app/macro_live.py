@@ -1,25 +1,35 @@
 """
-macro_live.py — 24-hour in-memory cache for the 6-pillar FRED macro engine.
+macro_live.py — in-memory cache for the 6-pillar FRED macro engine.
 
-Fetches fresh macro data once per UTC day (and on cold start). Webhook handlers
-read from memory — no external API call per trade.
+Refresh policy (V5.6):
+  • Every 4 hours (default)
+  • Every 1 hour when a HIGH-impact USD event is within 24h
+  • On cold start
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from typing import Any
 
-from backtester.macro_pillars import STATUS, build_macro_strength, pillars_for
+from backtester.macro_pillars import build_macro_strength, pillars_for
 
-# In-memory cache: both PMI variants refreshed together
+try:
+    from app.macro_calendar import calendar_status
+except ImportError:
+    calendar_status = None
+
 _cache: dict[str, Any] = {
     "oecd": None,
     "ism": None,
     "fetched_at": None,
     "refresh_lock": asyncio.Lock(),
 }
+
+REFRESH_SECONDS = int(os.getenv("MACRO_REFRESH_SECONDS", str(4 * 3600)))
+EVENT_PROXIMITY_REFRESH = int(os.getenv("MACRO_EVENT_REFRESH_SECONDS", str(3600)))
 
 NARRATIVE = {
     "fomc": {
@@ -56,14 +66,32 @@ STATE_SUMMARY = {
 }
 
 
+def _event_within_24h(now: datetime) -> bool:
+    if calendar_status is None:
+        return False
+    try:
+        st = calendar_status(now)
+        nh = st.get("next_high_impact")
+        if nh and (nh.time_utc - now).total_seconds() <= 24 * 3600:
+            return True
+        if st.get("in_blackout"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _needs_refresh(now: datetime | None = None) -> bool:
     now = now or datetime.now(timezone.utc)
     fetched = _cache["fetched_at"]
     if fetched is None:
         return True
-    if now.date() > fetched.date():
+    age = (now - fetched).total_seconds()
+    if age >= REFRESH_SECONDS:
         return True
-    return (now - fetched).total_seconds() >= 86400
+    if _event_within_24h(now) and age >= EVENT_PROXIMITY_REFRESH:
+        return True
+    return False
 
 
 def _fetch_all_sync() -> None:
@@ -75,7 +103,7 @@ def _fetch_all_sync() -> None:
 
 
 async def ensure_macro_fresh() -> None:
-    """Refresh cache if stale (new UTC day or never fetched)."""
+    """Refresh cache if stale."""
     if not _needs_refresh():
         return
     async with _cache["refresh_lock"]:
@@ -101,8 +129,14 @@ def get_macro_frame(pmi_source: str = "oecd"):
 
 def cache_status() -> dict:
     fetched = _cache["fetched_at"]
+    now = datetime.now(timezone.utc)
+    age_min = None
+    if fetched:
+        age_min = round((now - fetched).total_seconds() / 60, 1)
     return {
         "fetched_at": fetched.isoformat() if fetched else None,
+        "age_minutes": age_min,
+        "refresh_interval_hours": REFRESH_SECONDS / 3600,
         "oecd_rows": len(_cache["oecd"]) if _cache["oecd"] is not None else 0,
         "ism_rows": len(_cache["ism"]) if _cache["ism"] is not None else 0,
     }

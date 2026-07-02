@@ -17,11 +17,12 @@ from dotenv import load_dotenv
 from app.notifier import send_telegram_notification
 from app.nansen import fetch_full_intelligence
 from app.macro_live import ensure_macro_fresh, warm_macro_cache, calculate_usd_macro_bias, cache_status, live_pillar_summary
+from app.macro_calendar import calendar_status, format_calendar_block, ensure_calendar_fresh
 from app.trading_config import macro_settings_for_ticker, risk_settings_for_ticker, compute_atr_levels
 from app.atr_live import fetch_live_risk_atr
 
 load_dotenv()
-app = FastAPI(title="Sovereign Confluence Engine", version="5.5.5")
+app = FastAPI(title="Sovereign Confluence Engine", version="5.6.0")
 
 # --- THE EQUITIES PEAD CACHE (The Heavyweights) ---
 TECH_EARNINGS_CACHE = {
@@ -32,8 +33,7 @@ TECH_EARNINGS_CACHE = {
     "AMZN": {"surprise": "BEAT", "guidance": "STABLE", "weight": 1}
 }
 
-# --- NEXT MACRO EVENT COUNTDOWN TARGET ---
-NEXT_MACRO_TARGET = datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc)
+# Removed fake hardcoded countdown — real calendar in macro_calendar.py
 
 # --- THE AUTO-ROUTING CORRELATION MATRIX ---
 CRYPTO_CLEAN_MAP = {
@@ -123,15 +123,16 @@ async def _safe_process_signal(payload: TradingViewPayload):
 
 @app.on_event("startup")
 async def _startup_macro_cache():
-    """Warm the 6-pillar FRED cache before the first webhook."""
+    """Warm FRED + economic calendar before first webhook."""
     await warm_macro_cache()
+    ensure_calendar_fresh()
 
 
 @app.get("/")
 async def root():
     status = cache_status()
     return {
-        "status": "Engine V5.5.5 Active - Live 6-Pillar Macro Engaged",
+        "status": "Engine V5.6.0 Active - Live Calendar + 6-Pillar Macro",
         "macro_cache": status,
     }
 
@@ -185,6 +186,9 @@ def _macro_decision(direction: str, macro_bias: int, require_non_neutral: bool) 
 # --- THE BACKGROUND WORKER (Heavy Lifting) ---
 async def process_tradingview_signal(payload: TradingViewPayload, *, source: str = "TradingView Live"):
     await ensure_macro_fresh()
+    now = datetime.now(timezone.utc)
+    ensure_calendar_fresh(now)
+    cal = calendar_status(now)
 
     raw_ticker = payload.ticker.upper().replace("/", "").replace("-", "").replace(" ", "").replace(".P", "")
     is_forex = len(raw_ticker) == 6 and raw_ticker[:3] in CURRENCY_KEYWORDS and raw_ticker[3:] in CURRENCY_KEYWORDS
@@ -348,17 +352,25 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
 
     price_display = f"{payload.price:,.5f}" if is_forex else f"{payload.price:,.2f}"
 
-    now = datetime.now(timezone.utc)
     sync_time_str = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     cache = cache_status()
     macro_sync = cache.get("fetched_at") or sync_time_str
+    cache_age = cache.get("age_minutes")
+    cache_age_str = f"{cache_age:.0f}m ago" if cache_age is not None else "unknown"
 
-    if now < NEXT_MACRO_TARGET:
-        delta = NEXT_MACRO_TARGET - now
-        hours_left = delta.seconds // 3600
-        countdown = f"{delta.days}d {hours_left}h"
-    else:
-        countdown = "DATA REFRESH REQUIRED"
+    # News blackout overrides macro EXECUTE (HIGH impact window)
+    if cal["in_blackout"]:
+        decision = "ABORT"
+        stars = "🚫"
+        blackout_line = (
+            f"\n🚫 <b>NEWS BLACKOUT:</b> {cal['blackout_reason']}\n"
+            f"<i>No new trades during HIGH-impact USD release window "
+            f"({os.getenv('MACRO_BLACKOUT_HOURS_BEFORE', '2')}h before → "
+            f"{os.getenv('MACRO_BLACKOUT_HOURS_AFTER', '1')}h after).</i>"
+        )
+        reasoning = blackout_line + "\n" + reasoning
+
+    calendar_block = format_calendar_block(cal)
 
     # --- Stop levels: server-side ATR(14) for atr-mode assets (no plot in TV JSON) ---
     risk_cfg = risk_settings_for_ticker(raw_ticker)
@@ -405,12 +417,38 @@ async def process_tradingview_signal(payload: TradingViewPayload, *, source: str
         f"📝 <b>Analyst Brief:</b>\n{reasoning}\n"
         f"━━━━━━━━━━━━━━━\n"
         f"⏱️ <b>Data Synced:</b> <code>{sync_time_str}</code>\n"
-        f"🔄 <b>Macro Cache:</b> <code>{macro_sync}</code>\n"
-        f"⏳ <b>Next Macro Event:</b> <code>{countdown}</code>\n"
-        f"📈 <i>Confluence Engine V5.5.5</i>"
+        f"🔄 <b>FRED Cache:</b> <code>{macro_sync}</code> ({cache_age_str})\n"
+        f"{calendar_block}"
+        f"📈 <i>Confluence Engine V5.6.0</i>"
     )
 
     await send_telegram_notification(rich_message)
+
+
+@app.get("/macro-status")
+async def macro_status():
+    """Live FRED cache + USD economic calendar + blackout state."""
+    await ensure_macro_fresh()
+    now = datetime.now(timezone.utc)
+    ensure_calendar_fresh(now)
+    cal = calendar_status(now)
+    return {
+        "engine": "V5.6.0",
+        "fred_cache": cache_status(),
+        "calendar": {
+            "countdown": cal["countdown_line"],
+            "in_blackout": cal["in_blackout"],
+            "blackout_reason": cal["blackout_reason"],
+            "warnings": cal["warnings"],
+            "next_high": (
+                {"title": cal["next_high_impact"].title, "utc": cal["next_high_impact"].time_utc.isoformat()}
+                if cal["next_high_impact"] else None
+            ),
+            "events_next_7d": cal["event_count"],
+        },
+        "fred_oecd": live_pillar_summary("oecd"),
+        "fred_ism": live_pillar_summary("ism"),
+    }
 
 
 @app.get("/test-alert")
